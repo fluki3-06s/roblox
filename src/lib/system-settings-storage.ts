@@ -8,6 +8,8 @@ export type PersistedSystemSettings = {
   verticalStrength?: number[];
   horizontalStrength?: number[];
   selectedMode?: string;
+  uiAccentColor?: string;
+  soundTone?: "guitar" | "piano" | "soft" | "metal";
   hotkeys?: Record<string, string>;
   userName?: string;
   savedConfigs?: Array<{
@@ -15,6 +17,7 @@ export type PersistedSystemSettings = {
     name: string;
     vertical: number;
     horizontal: number;
+    hotkeys?: Record<string, string>;
     createdAt?: number;
   }>;
 };

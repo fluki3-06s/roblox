@@ -1,7 +1,8 @@
 "use client";
 
-import { ChevronRight, FolderOpen, Minus, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { ChevronRight, FolderOpen, Minus, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { ScienceNetworkBackground } from "@/components/science-network-background";
 import { SoundToggleButton } from "@/components/sound-toggle-button";
@@ -9,6 +10,15 @@ import { Avatar, AvatarBadge, AvatarFallback, AvatarImage } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
+import {
+  readRecoilStatus,
+  setRecoilEnabled,
+  setRecoilScope,
+  startRecoilEngine,
+  stopRecoilEngine,
+  updateRecoilHotkeys,
+  updateRecoilSettings,
+} from "@/lib/recoil-engine";
 import { isSoundEnabled } from "@/lib/sound-settings";
 import { readSystemSettings, writeSystemSettings } from "@/lib/system-settings-storage";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -30,15 +40,48 @@ const defaultHotkeys: Record<string, string> = {
   "SCOPE X6": "F5",
 };
 
+const uiModeToRecoilScope: Record<string, "Red Dot" | "x2" | "x3" | "x4" | "x6"> = {
+  Reddot: "Red Dot",
+  "SCOPE X2": "x2",
+  "SCOPE X3": "x3",
+  "SCOPE X4": "x4",
+  "SCOPE X6": "x6",
+};
+
+const recoilScopeToUiMode: Record<"Red Dot" | "x2" | "x3" | "x4" | "x6", string> = {
+  "Red Dot": "Reddot",
+  x2: "SCOPE X2",
+  x3: "SCOPE X3",
+  x4: "SCOPE X4",
+  x6: "SCOPE X6",
+};
+
 type ConfigPreset = {
   id: string;
   name: string;
   vertical: number;
   horizontal: number;
+  hotkeys?: Record<string, string>;
   createdAt: number;
 };
 
 const initialSavedConfigs: ConfigPreset[] = [];
+type SoundTone = "guitar" | "piano" | "soft";
+type PianoSample = { freq: number; file: string };
+
+const pianoSamples: PianoSample[] = [
+  { freq: 196.0, file: "/sfx/piano-real/G3.mp3" },
+  { freq: 246.94, file: "/sfx/piano-real/B3.mp3" },
+  { freq: 261.63, file: "/sfx/piano-real/C4.mp3" },
+  { freq: 293.66, file: "/sfx/piano-real/D4.mp3" },
+  { freq: 329.63, file: "/sfx/piano-real/E4.mp3" },
+  { freq: 349.23, file: "/sfx/piano-real/F4.mp3" },
+  { freq: 369.99, file: "/sfx/piano-real/Gb4.mp3" },
+  { freq: 392.0, file: "/sfx/piano-real/G4.mp3" },
+  { freq: 440.0, file: "/sfx/piano-real/A4.mp3" },
+  { freq: 493.88, file: "/sfx/piano-real/B4.mp3" },
+  { freq: 523.25, file: "/sfx/piano-real/C5.mp3" },
+];
 
 const systemPresets: ConfigPreset[] = [
   { id: "sys-1", name: "M416", vertical: 50, horizontal: 50, createdAt: 1 },
@@ -125,6 +168,20 @@ function formatHotkeyLabel(key: string, code: string) {
   return key[0].toUpperCase() + key.slice(1);
 }
 
+function formatMouseButtonLabel(button: number) {
+  if (button === 3) return "Mouse4";
+  if (button === 4) return "Mouse5";
+  return null;
+}
+
+function normalizeHotkeyToken(value: string) {
+  return value.trim().toUpperCase();
+}
+
+function isValidHexColor(value: string) {
+  return /^#[0-9A-Fa-f]{6}$/.test(value.trim());
+}
+
 async function handleWindowAction(action: "minimize" | "close") {
   try {
     const appWindow = getCurrentWindow();
@@ -138,82 +195,191 @@ async function handleWindowAction(action: "minimize" | "close") {
   }
 }
 
-function playModeSwitchBeep(mode: string) {
+function playModeSwitchBeep(mode: string, soundTone: SoundTone) {
   if (!isSoundEnabled()) return;
-  const AudioContextClass =
-    window.AudioContext ||
-    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextClass) return;
 
   const toneMap: Record<string, [number, number]> = {
-    Reddot: [740, 920],
-    "SCOPE X2": [860, 1080],
-    "SCOPE X3": [980, 1240],
-    "SCOPE X4": [1120, 1410],
-    "SCOPE X6": [1280, 1620],
+    Reddot: [330, 247], // E4 -> B3
+    "SCOPE X2": [392, 294], // G4 -> D4
+    "SCOPE X3": [440, 330], // A4 -> E4
+    "SCOPE X4": [494, 370], // B4 -> F#4
+    "SCOPE X6": [523, 392], // C5 -> G4
   };
-  const [startFreq, endFreq] = toneMap[mode] ?? [980, 1240];
+  const [first, second] = toneMap[mode] ?? [440, 330];
 
-  const context = new AudioContextClass();
-  const oscillator = context.createOscillator();
-  const gainNode = context.createGain();
+  if (soundTone === "piano") {
+    playPianoSample(first, 0, 0.62);
+    playPianoSample(second, 0.06, 0.58);
+    return;
+  }
 
-  oscillator.type = "square";
-  oscillator.frequency.setValueAtTime(startFreq, context.currentTime);
-  oscillator.frequency.exponentialRampToValueAtTime(endFreq, context.currentTime + 0.06);
-
-  gainNode.gain.setValueAtTime(0.0001, context.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.34, context.currentTime + 0.01);
-  gainNode.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.09);
-
-  oscillator.connect(gainNode);
-  gainNode.connect(context.destination);
-  oscillator.start();
-  oscillator.stop(context.currentTime + 0.1);
-
-  oscillator.onended = () => {
-    void context.close();
-  };
-}
-
-function playConfigActionBeep() {
-  if (!isSoundEnabled()) return;
   const AudioContextClass =
     window.AudioContext ||
     (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) return;
-
   const context = new AudioContextClass();
-  const oscillator = context.createOscillator();
-  const gainNode = context.createGain();
+  playToneSynth(context, soundTone, first, 0.16, 0);
+  playToneSynth(context, soundTone, second, 0.14, 0.06);
 
-  oscillator.type = "triangle";
-  oscillator.frequency.setValueAtTime(740, context.currentTime);
-  oscillator.frequency.exponentialRampToValueAtTime(980, context.currentTime + 0.08);
-
-  gainNode.gain.setValueAtTime(0.0001, context.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.3, context.currentTime + 0.012);
-  gainNode.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.12);
-
-  oscillator.connect(gainNode);
-  gainNode.connect(context.destination);
-  oscillator.start();
-  oscillator.stop(context.currentTime + 0.13);
-
-  oscillator.onended = () => {
+  window.setTimeout(() => {
     void context.close();
-  };
+  }, 260);
 }
 
-function normalizeSliderValue(value: number | readonly number[]) {
-  const raw = Array.isArray(value) ? (value[0] ?? 1) : value;
-  const clamped = Math.min(100, Math.max(1, raw));
-  return [Math.round(clamped * 10) / 10];
+function playConfigActionBeep(soundTone: SoundTone) {
+  if (!isSoundEnabled()) return;
+
+  if (soundTone === "piano") {
+    playPianoSample(247, 0, 0.62);
+    playPianoSample(330, 0.045, 0.56);
+    return;
+  }
+
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) return;
+  const context = new AudioContextClass();
+  playToneSynth(context, soundTone, 247, 0.16, 0);
+  playToneSynth(context, soundTone, 330, 0.12, 0.045);
+
+  window.setTimeout(() => {
+    void context.close();
+  }, 240);
 }
 
-function formatOffsetValue(value: number | undefined) {
-  const numeric = typeof value === "number" ? value : 1;
-  return numeric.toFixed(1);
+function nearestPianoSample(freq: number) {
+  let nearest = pianoSamples[0];
+  for (const sample of pianoSamples) {
+    if (Math.abs(sample.freq - freq) < Math.abs((nearest?.freq ?? 0) - freq)) {
+      nearest = sample;
+    }
+  }
+  return nearest;
+}
+
+function playPianoSample(freq: number, offsetSec: number, volume: number) {
+  window.setTimeout(() => {
+    const sample = nearestPianoSample(freq);
+    const audio = new Audio(sample.file);
+    audio.volume = volume;
+    void audio.play().catch(() => {
+      // Ignore autoplay-style failures for transient UI sound.
+    });
+  }, offsetSec * 1000);
+}
+
+function playToneSynth(
+  context: AudioContext,
+  soundTone: SoundTone,
+  freq: number,
+  duration: number,
+  offsetSec: number
+) {
+  if (soundTone === "soft") {
+    playSoftTone(context, freq, duration, offsetSec);
+    return;
+  }
+  playGuitarPluck(context, freq, duration, offsetSec);
+}
+
+function playGuitarPluck(context: AudioContext, freq: number, duration: number, offsetSec: number) {
+  const t0 = context.currentTime + offsetSec;
+  const osc = context.createOscillator();
+  const body = context.createBiquadFilter();
+  const pick = context.createBiquadFilter();
+  const amp = context.createGain();
+  const pickAmp = context.createGain();
+
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(freq, t0);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(60, freq * 0.995), t0 + duration);
+
+  body.type = "lowpass";
+  body.frequency.setValueAtTime(2800, t0);
+  body.Q.value = 0.8;
+
+  pick.type = "highpass";
+  pick.frequency.setValueAtTime(1900, t0);
+  pick.Q.value = 0.7;
+
+  amp.gain.setValueAtTime(0.0001, t0);
+  amp.gain.exponentialRampToValueAtTime(0.23, t0 + 0.006);
+  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+
+  pickAmp.gain.setValueAtTime(0.18, t0);
+  pickAmp.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.022);
+
+  osc.connect(body);
+  body.connect(amp);
+  amp.connect(context.destination);
+
+  osc.connect(pick);
+  pick.connect(pickAmp);
+  pickAmp.connect(context.destination);
+
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.01);
+}
+
+function playSoftTone(context: AudioContext, freq: number, duration: number, offsetSec: number) {
+  const t0 = context.currentTime + offsetSec;
+  const osc = context.createOscillator();
+  const body = context.createBiquadFilter();
+  const amp = context.createGain();
+
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(freq, t0);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(50, freq * 0.99), t0 + duration);
+
+  body.type = "lowpass";
+  body.frequency.setValueAtTime(1700, t0);
+  body.Q.value = 0.4;
+
+  amp.gain.setValueAtTime(0.0001, t0);
+  amp.gain.exponentialRampToValueAtTime(0.14, t0 + 0.008);
+  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+
+  osc.connect(body);
+  body.connect(amp);
+  amp.connect(context.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.01);
+}
+
+function normalizeSliderValue(
+  value: number | readonly number[],
+  min: number,
+  max: number,
+  precision: number = 1
+) {
+  const raw = Array.isArray(value) ? (value[0] ?? min) : value;
+  const clamped = Math.min(max, Math.max(min, raw));
+  const factor = 10 ** precision;
+  return [Math.round(clamped * factor) / factor];
+}
+
+function formatOffsetValue(value: number | undefined, precision: number = 1) {
+  const numeric = typeof value === "number" ? value : 0;
+  return numeric.toFixed(precision);
+}
+
+function normalizeGlobalScale(value: number | readonly number[]) {
+  return normalizeSliderValue(value, 0, 3, 2);
+}
+
+function normalizeStepInterval(value: number | readonly number[]) {
+  return normalizeSliderValue(value, 6, 16, 1);
+}
+
+function convertLegacyGlobalScale(value: number) {
+  if (value >= 0 && value <= 3) return value;
+  return Math.max(0, Math.min(3, 1 + ((value - 50) * 0.4) / 50));
+}
+
+function convertLegacyStepInterval(value: number) {
+  if (value >= 6 && value <= 16) return Math.round(value);
+  return Math.max(6, Math.min(16, Math.round(10 + ((value - 50) * 6) / 50)));
 }
 
 function formatDurationLabel(totalSeconds: number) {
@@ -259,11 +425,12 @@ async function openDiscordInviteViaRpc() {
 }
 
 export default function SystemPage() {
+  const router = useRouter();
   const DUPLICATE_TOAST_COOLDOWN_MS = 1200;
   const [isWindowReady, setIsWindowReady] = useState(false);
   const [isPanelBooting, setIsPanelBooting] = useState(true);
-  const [verticalStrength, setVerticalStrength] = useState([50]);
-  const [horizontalStrength, setHorizontalStrength] = useState([50]);
+  const [verticalStrength, setVerticalStrength] = useState([1.0]);
+  const [horizontalStrength, setHorizontalStrength] = useState([10]);
   const [selectedMode, setSelectedMode] = useState<string>(modeItems[0]);
   const [savedConfigs, setSavedConfigs] = useState<ConfigPreset[]>(initialSavedConfigs);
   const [hotkeys, setHotkeys] = useState<Record<string, string>>(defaultHotkeys);
@@ -283,10 +450,15 @@ export default function SystemPage() {
   const [configSortMode, setConfigSortMode] = useState<"latest" | "name">("latest");
   const [pendingDeleteConfigId, setPendingDeleteConfigId] = useState<string | null>(null);
   const [hasHydratedSettings, setHasHydratedSettings] = useState(false);
-  const [verticalOffsetInput, setVerticalOffsetInput] = useState(formatOffsetValue(50));
-  const [horizontalOffsetInput, setHorizontalOffsetInput] = useState(formatOffsetValue(50));
+  const [verticalOffsetInput, setVerticalOffsetInput] = useState(formatOffsetValue(1.0, 2));
+  const [horizontalOffsetInput, setHorizontalOffsetInput] = useState(formatOffsetValue(10, 1));
   const [isVerticalInputEditing, setIsVerticalInputEditing] = useState(false);
   const [isHorizontalInputEditing, setIsHorizontalInputEditing] = useState(false);
+  const [isRecoilEnabled, setIsRecoilEnabled] = useState(true);
+  const [isRecoilRunning, setIsRecoilRunning] = useState(false);
+  const [runtimeScope, setRuntimeScope] = useState<"Red Dot" | "x2" | "x3" | "x4" | "x6">("Red Dot");
+  const [accentColor, setAccentColor] = useState("#22D3EE");
+  const [soundTone, setSoundTone] = useState<SoundTone>("guitar");
   const [avatarUrl, setAvatarUrl] = useState(
     "https://api.dicebear.com/9.x/adventurer-neutral/svg?seed=user-12&backgroundType=gradientLinear"
   );
@@ -295,6 +467,8 @@ export default function SystemPage() {
   const userNameInputRef = useRef<HTMLInputElement | null>(null);
   const sliderHoldIntervalRef = useRef<number | null>(null);
   const sliderHoldStartTimeoutRef = useRef<number | null>(null);
+  const recoilRecoveringRef = useRef(false);
+  const pressedHotkeysRef = useRef<Set<string>>(new Set());
 
   function clearSliderHoldInterval() {
     if (sliderHoldStartTimeoutRef.current !== null) {
@@ -308,10 +482,10 @@ export default function SystemPage() {
 
   function applyOffsetDelta(target: "vertical" | "horizontal", delta: number) {
     if (target === "vertical") {
-      setVerticalStrength((prev) => normalizeSliderValue((prev[0] ?? 1) + delta));
+      setVerticalStrength((prev) => normalizeGlobalScale((prev[0] ?? 1.0) + delta));
       return;
     }
-    setHorizontalStrength((prev) => normalizeSliderValue((prev[0] ?? 1) + delta));
+    setHorizontalStrength((prev) => normalizeStepInterval((prev[0] ?? 10) + delta));
   }
 
   function startOffsetHold(target: "vertical" | "horizontal", delta: number) {
@@ -331,6 +505,7 @@ export default function SystemPage() {
   ) {
     const setter = target === "vertical" ? setVerticalOffsetInput : setHorizontalOffsetInput;
     const setStrength = target === "vertical" ? setVerticalStrength : setHorizontalStrength;
+    const precision = target === "vertical" ? 2 : 1;
 
     if (!/^\d*\.?\d*$/.test(rawValue)) return;
     setter(rawValue);
@@ -338,7 +513,7 @@ export default function SystemPage() {
     if (!rawValue.trim()) {
       if (commit) {
         const fallback = target === "vertical" ? verticalStrength[0] : horizontalStrength[0];
-        setter(formatOffsetValue(fallback));
+        setter(formatOffsetValue(fallback, precision));
       }
       return;
     }
@@ -347,10 +522,11 @@ export default function SystemPage() {
     if (!Number.isFinite(parsed)) return;
 
     if (commit) {
-      const normalized = normalizeSliderValue(parsed)[0];
+      const normalized =
+        target === "vertical" ? normalizeGlobalScale(parsed)[0] : normalizeStepInterval(parsed)[0];
       if (typeof normalized === "number") {
         setStrength([normalized]);
-        setter(formatOffsetValue(normalized));
+        setter(formatOffsetValue(normalized, precision));
       }
     }
   }
@@ -358,7 +534,26 @@ export default function SystemPage() {
   function setModeWithFeedback(nextMode: string) {
     if (selectedMode === nextMode) return;
     setSelectedMode(nextMode);
-    playModeSwitchBeep(nextMode);
+    playModeSwitchBeep(nextMode, soundTone);
+    const recoilScope = uiModeToRecoilScope[nextMode] ?? "Red Dot";
+    setRuntimeScope(recoilScope);
+    void setRecoilScope(recoilScope).catch(() => {
+      setActionNotice({ text: "Failed to switch scope", tone: "error" });
+    });
+  }
+
+  async function toggleRecoilRuntime() {
+    const next = !isRecoilEnabled;
+    setIsRecoilEnabled(next);
+    try {
+      await setRecoilEnabled(next);
+      const status = await readRecoilStatus();
+      setIsRecoilEnabled(status.enabled);
+      setIsRecoilRunning(status.running);
+    } catch {
+      setIsRecoilEnabled(!next);
+      setActionNotice({ text: "Failed to update recoil state", tone: "error" });
+    }
   }
 
   useEffect(() => {
@@ -415,12 +610,12 @@ export default function SystemPage() {
 
   useEffect(() => {
     if (isVerticalInputEditing) return;
-    setVerticalOffsetInput(formatOffsetValue(verticalStrength[0]));
+    setVerticalOffsetInput(formatOffsetValue(verticalStrength[0], 2));
   }, [verticalStrength, isVerticalInputEditing]);
 
   useEffect(() => {
     if (isHorizontalInputEditing) return;
-    setHorizontalOffsetInput(formatOffsetValue(horizontalStrength[0]));
+    setHorizontalOffsetInput(formatOffsetValue(horizontalStrength[0], 1));
   }, [horizontalStrength, isHorizontalInputEditing]);
 
   useEffect(() => {
@@ -456,11 +651,14 @@ export default function SystemPage() {
   function applyPreset(preset: ConfigPreset) {
     setVerticalStrength([preset.vertical]);
     setHorizontalStrength([preset.horizontal]);
+    if (preset.hotkeys && typeof preset.hotkeys === "object") {
+      setHotkeys({ ...defaultHotkeys, ...preset.hotkeys });
+    }
     setUserName(preset.name.slice(0, 8));
     setDraftUserName(preset.name.slice(0, 8));
     setPendingDeleteConfigId(null);
     setIsLoadModalOpen(false);
-    playConfigActionBeep();
+    playConfigActionBeep(soundTone);
     setActionNotice({ text: `Loaded ${preset.name}`, tone: "success" });
   }
 
@@ -481,6 +679,7 @@ export default function SystemPage() {
                 ...item,
                 vertical: verticalStrength[0] ?? 0,
                 horizontal: horizontalStrength[0] ?? 0,
+                hotkeys: { ...hotkeys },
                 createdAt: Date.now(),
               }
             : item
@@ -492,14 +691,14 @@ export default function SystemPage() {
         name: configName,
         vertical: verticalStrength[0] ?? 0,
         horizontal: horizontalStrength[0] ?? 0,
+        hotkeys: { ...hotkeys },
         createdAt: Date.now(),
       };
       return [created, ...prev];
     });
     setUserName(configName);
     setDraftUserName(configName);
-    playConfigActionBeep();
-    setActionNotice({ text: `Saved ${configName}`, tone: "success" });
+    playConfigActionBeep(soundTone);
   }
 
   const filteredSortedSavedConfigs = useMemo(() => {
@@ -540,22 +739,40 @@ export default function SystemPage() {
           Array.isArray(parsed.verticalStrength) &&
           typeof parsed.verticalStrength[0] === "number"
         ) {
-          setVerticalStrength([parsed.verticalStrength[0]]);
+          setVerticalStrength([convertLegacyGlobalScale(parsed.verticalStrength[0])]);
         }
 
         if (
           Array.isArray(parsed.horizontalStrength) &&
           typeof parsed.horizontalStrength[0] === "number"
         ) {
-          setHorizontalStrength([parsed.horizontalStrength[0]]);
+          setHorizontalStrength([convertLegacyStepInterval(parsed.horizontalStrength[0])]);
         }
 
         if (typeof parsed.selectedMode === "string" && modeItems.includes(parsed.selectedMode)) {
           setSelectedMode(parsed.selectedMode);
         }
 
+        if (typeof parsed.uiAccentColor === "string" && isValidHexColor(parsed.uiAccentColor)) {
+          setAccentColor(parsed.uiAccentColor.toUpperCase());
+        }
+
+        if (
+          parsed.soundTone === "guitar" ||
+          parsed.soundTone === "piano" ||
+          parsed.soundTone === "soft"
+        ) {
+          setSoundTone(parsed.soundTone);
+        } else if (parsed.soundTone === "metal") {
+          // Backward compatibility: old "metal" maps to new "piano".
+          setSoundTone("piano");
+        }
+
         if (parsed.hotkeys && typeof parsed.hotkeys === "object") {
-          setHotkeys(parsed.hotkeys);
+          setHotkeys((prev) => ({
+            ...prev,
+            ...parsed.hotkeys,
+          }));
         }
 
         if (typeof parsed.userName === "string" && parsed.userName.trim()) {
@@ -587,13 +804,25 @@ export default function SystemPage() {
       verticalStrength,
       horizontalStrength,
       selectedMode,
+      uiAccentColor: accentColor,
+      soundTone,
       hotkeys,
       userName,
       savedConfigs,
     };
 
     void writeSystemSettings(payload);
-  }, [hasHydratedSettings, verticalStrength, horizontalStrength, selectedMode, hotkeys, userName, savedConfigs]);
+  }, [
+    hasHydratedSettings,
+    verticalStrength,
+    horizontalStrength,
+    selectedMode,
+    accentColor,
+    soundTone,
+    hotkeys,
+    userName,
+    savedConfigs,
+  ]);
 
   useEffect(() => {
     // Demo countdown (6h 30m from now). Replace with your real expiry timestamp.
@@ -623,6 +852,7 @@ export default function SystemPage() {
 
     function onKeyDown(event: KeyboardEvent) {
       event.preventDefault();
+      if (event.repeat) return;
 
       if (event.key === "Escape") {
         setBindingTarget(null);
@@ -631,7 +861,39 @@ export default function SystemPage() {
 
       const nextKey = formatHotkeyLabel(event.key, event.code);
       const duplicate = Object.entries(hotkeys).find(
-        ([mode, assigned]) => mode !== bindingTarget && assigned === nextKey
+        ([mode, assigned]) =>
+          mode !== bindingTarget && normalizeHotkeyToken(assigned) === normalizeHotkeyToken(nextKey)
+      );
+
+      if (duplicate) {
+        const now = Date.now();
+        if (now - lastDuplicateToastAtRef.current < DUPLICATE_TOAST_COOLDOWN_MS) {
+          return;
+        }
+
+        lastDuplicateToastAtRef.current = now;
+        setHotkeyNotice(`${nextKey} is already used by ${duplicate[0]}.`);
+        return;
+      }
+
+      const target = bindingTarget;
+      if (!target) return;
+
+      setHotkeys((prev) => ({
+        ...prev,
+        [target]: nextKey,
+      }));
+      setBindingTarget(null);
+    }
+
+    function onMouseDown(event: MouseEvent) {
+      const nextKey = formatMouseButtonLabel(event.button);
+      if (!nextKey) return;
+      event.preventDefault();
+
+      const duplicate = Object.entries(hotkeys).find(
+        ([mode, assigned]) =>
+          mode !== bindingTarget && normalizeHotkeyToken(assigned) === normalizeHotkeyToken(nextKey)
       );
 
       if (duplicate) {
@@ -656,7 +918,11 @@ export default function SystemPage() {
     }
 
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("mousedown", onMouseDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("mousedown", onMouseDown);
+    };
   }, [bindingTarget, hotkeys]);
 
   useEffect(() => {
@@ -664,15 +930,56 @@ export default function SystemPage() {
 
     function onHotkeySwitch(event: KeyboardEvent) {
       const pressedKey = formatHotkeyLabel(event.key, event.code);
-      const matchedMode = Object.entries(hotkeys).find(([, assigned]) => assigned === pressedKey)?.[0];
+      const normalized = normalizeHotkeyToken(pressedKey);
+      if (pressedHotkeysRef.current.has(normalized)) return;
+      pressedHotkeysRef.current.add(normalized);
+      const matchedMode = Object.entries(hotkeys).find(
+        ([, assigned]) => normalizeHotkeyToken(assigned) === normalized
+      )?.[0];
       if (!matchedMode) return;
 
       event.preventDefault();
       setModeWithFeedback(matchedMode);
     }
 
+    function onMouseHotkeySwitch(event: MouseEvent) {
+      const pressedKey = formatMouseButtonLabel(event.button);
+      if (!pressedKey) return;
+      const normalized = normalizeHotkeyToken(pressedKey);
+      if (pressedHotkeysRef.current.has(normalized)) return;
+      pressedHotkeysRef.current.add(normalized);
+
+      const matchedMode = Object.entries(hotkeys).find(
+        ([, assigned]) => normalizeHotkeyToken(assigned) === normalized
+      )?.[0];
+      if (!matchedMode) return;
+
+      event.preventDefault();
+      setModeWithFeedback(matchedMode);
+    }
+
+    function onHotkeyRelease(event: KeyboardEvent) {
+      const released = normalizeHotkeyToken(formatHotkeyLabel(event.key, event.code));
+      pressedHotkeysRef.current.delete(released);
+    }
+
+    function onMouseHotkeyRelease(event: MouseEvent) {
+      const releasedKey = formatMouseButtonLabel(event.button);
+      if (!releasedKey) return;
+      pressedHotkeysRef.current.delete(normalizeHotkeyToken(releasedKey));
+    }
+
     window.addEventListener("keydown", onHotkeySwitch);
-    return () => window.removeEventListener("keydown", onHotkeySwitch);
+    window.addEventListener("keyup", onHotkeyRelease);
+    window.addEventListener("mousedown", onMouseHotkeySwitch);
+    window.addEventListener("mouseup", onMouseHotkeyRelease);
+    return () => {
+      window.removeEventListener("keydown", onHotkeySwitch);
+      window.removeEventListener("keyup", onHotkeyRelease);
+      window.removeEventListener("mousedown", onMouseHotkeySwitch);
+      window.removeEventListener("mouseup", onMouseHotkeyRelease);
+      pressedHotkeysRef.current.clear();
+    };
   }, [bindingTarget, hotkeys, selectedMode]);
 
   useEffect(() => {
@@ -690,24 +997,158 @@ export default function SystemPage() {
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, [bindingTarget]);
 
+  useEffect(() => {
+    // Prevent browser/webview Back/Forward behavior from Mouse4/Mouse5.
+    function blockSideMouseNavigation(event: MouseEvent) {
+      if (event.button !== 3 && event.button !== 4) return;
+      event.preventDefault();
+    }
+
+    const options: AddEventListenerOptions = { capture: true };
+    window.addEventListener("mousedown", blockSideMouseNavigation, options);
+    window.addEventListener("mouseup", blockSideMouseNavigation, options);
+    window.addEventListener("auxclick", blockSideMouseNavigation, options);
+    return () => {
+      window.removeEventListener("mousedown", blockSideMouseNavigation, options);
+      window.removeEventListener("mouseup", blockSideMouseNavigation, options);
+      window.removeEventListener("auxclick", blockSideMouseNavigation, options);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Some environments inject a generic "Saved info" popup; remove only that one.
+    function removeSavedInfoPopup() {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      let node: Node | null = walker.nextNode();
+      while (node) {
+        const text = node.textContent?.trim();
+        if (text === "Saved info") {
+          const holder = (node.parentElement?.closest(
+            "[data-sonner-toast], [role='status'], [role='alert'], [aria-live='polite'], [aria-live='assertive']"
+          ) ?? node.parentElement) as HTMLElement | null;
+          if (holder) {
+            holder.remove();
+          }
+        }
+        node = walker.nextNode();
+      }
+    }
+
+    removeSavedInfoPopup();
+    const observer = new MutationObserver(() => removeSavedInfoPopup());
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    async function bootRecoilEngine() {
+      try {
+        await startRecoilEngine();
+        await setRecoilEnabled(true);
+        await updateRecoilHotkeys(hotkeys);
+        const status = await readRecoilStatus();
+        setIsRecoilEnabled(status.enabled);
+        setIsRecoilRunning(status.running);
+        setRuntimeScope(status.scope);
+      } catch {
+        setActionNotice({ text: "Failed to start recoil engine", tone: "error" });
+      }
+    }
+
+    void bootRecoilEngine();
+    return () => {
+      void stopRecoilEngine();
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void readRecoilStatus()
+        .then((status) => {
+          setIsRecoilEnabled(status.enabled);
+          setIsRecoilRunning(status.running);
+          setRuntimeScope(status.scope);
+          if (!status.running && !recoilRecoveringRef.current) {
+            recoilRecoveringRef.current = true;
+            void (async () => {
+              try {
+                await startRecoilEngine();
+                await setRecoilEnabled(true);
+                const recovered = await readRecoilStatus();
+                setIsRecoilEnabled(recovered.enabled);
+                setIsRecoilRunning(recovered.running);
+                setRuntimeScope(recovered.scope);
+              } catch {
+                // retry on next poll tick
+              } finally {
+                recoilRecoveringRef.current = false;
+              }
+            })();
+          }
+        })
+        .catch(() => {
+          setIsRecoilRunning(false);
+          if (recoilRecoveringRef.current) return;
+          recoilRecoveringRef.current = true;
+          void (async () => {
+            try {
+              await startRecoilEngine();
+              await setRecoilEnabled(true);
+              const recovered = await readRecoilStatus();
+              setIsRecoilEnabled(recovered.enabled);
+              setIsRecoilRunning(recovered.running);
+              setRuntimeScope(recovered.scope);
+            } catch {
+              // retry on next poll tick
+            } finally {
+              recoilRecoveringRef.current = false;
+            }
+          })();
+        });
+    }, 80);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const uiMode = recoilScopeToUiMode[runtimeScope];
+    if (uiMode && uiMode !== selectedMode) {
+      setSelectedMode(uiMode);
+    }
+  }, [runtimeScope, selectedMode]);
+
+  useEffect(() => {
+    const recoilScope = uiModeToRecoilScope[selectedMode] ?? "Red Dot";
+    void setRecoilScope(recoilScope);
+  }, [selectedMode]);
+
+  useEffect(() => {
+    const globalScale = normalizeGlobalScale(verticalStrength)[0] ?? 1.0;
+    const stepInterval = normalizeStepInterval(horizontalStrength)[0] ?? 10;
+    void updateRecoilSettings(globalScale, stepInterval);
+  }, [verticalStrength, horizontalStrength]);
+
+  useEffect(() => {
+    void updateRecoilHotkeys(hotkeys);
+  }, [hotkeys]);
+
   return (
     <div
       className={`relative h-screen overflow-hidden bg-black text-zinc-100 select-none ${
         isWindowReady ? "opacity-100" : "opacity-0"
       }`}
     >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_8%,rgba(255,255,255,0.11),transparent_38%),radial-gradient(circle_at_80%_12%,rgba(255,255,255,0.07),transparent_34%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-      <div className="soft-glow-move pointer-events-none absolute -left-12 top-10 h-40 w-40 rounded-full bg-white/8 blur-3xl" />
-      <div className="soft-glow-move pointer-events-none absolute -right-10 bottom-12 h-44 w-44 rounded-full bg-white/7 blur-3xl [animation-delay:1.2s]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_8%,rgba(255,255,255,0.035),transparent_38%),radial-gradient(circle_at_80%_12%,rgba(255,255,255,0.018),transparent_34%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
+      <div className="soft-glow-move pointer-events-none absolute -left-12 top-10 h-40 w-40 rounded-full bg-white/[0.01] blur-3xl" />
+      <div className="soft-glow-move pointer-events-none absolute -right-10 bottom-12 h-44 w-44 rounded-full bg-white/[0.005] blur-3xl [animation-delay:1.2s]" />
 
       <main
         className={`panel-enter relative grid h-screen grid-cols-[0.9fr_2.35fr_1.15fr] overflow-hidden rounded-none border border-white/10 bg-gradient-to-b from-white/10 via-zinc-950/58 to-black/68 shadow-[0_22px_90px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-2xl transition-opacity duration-400 ${
           isPanelBooting ? "opacity-0" : "opacity-100"
         }`}
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.11),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.07),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-        <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/8 blur-3xl" />
-        <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/6 blur-3xl" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.03),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.016),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
+        <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
+        <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
         <ScienceNetworkBackground className="z-[6] opacity-55" />
 
         <div
@@ -745,9 +1186,10 @@ export default function SystemPage() {
                 key={item}
                 className={`group relative overflow-hidden rounded-none transition ${
                   selectedMode === item
-                    ? "bg-white/12"
+                    ? ""
                     : "bg-transparent hover:bg-white/5"
                 }`}
+                style={selectedMode === item ? { backgroundColor: `${accentColor}1F` } : undefined}
               >
                 <button
                   type="button"
@@ -757,9 +1199,10 @@ export default function SystemPage() {
                   <span
                     className={`absolute left-0 top-0 h-full transition ${
                       selectedMode === item
-                        ? "w-1 bg-white"
+                        ? "w-1"
                         : "w-px bg-white/40 opacity-70 group-hover:opacity-100"
                     }`}
+                    style={selectedMode === item ? { backgroundColor: accentColor } : undefined}
                   />
                   <div className="flex items-center text-left">
                     <p className="text-[13px] font-semibold tracking-wide text-zinc-100 whitespace-nowrap">
@@ -824,22 +1267,50 @@ export default function SystemPage() {
                   <div className="mt-1.5 h-px w-20 bg-linear-to-r from-white/35 via-white/10 to-transparent" />
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => router.push("/settings")}
+                className="mt-1 flex w-[140px] items-center gap-2 rounded-none bg-transparent px-2 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-zinc-300 transition hover:text-white"
+              >
+                <Settings className="h-3.5 w-3.5" />
+                SETTINGS
+              </button>
             </div>
           </div>
         </section>
 
         <section className="panel-fade-up relative z-10 overflow-hidden border-r border-white/8 p-6 pt-10 [animation-delay:80ms]">
+          <div className="mb-2 flex items-center gap-1.5 px-3.5">
+            <span
+              className={`inline-block h-1.5 w-1.5 rounded-full ${
+                isRecoilRunning ? (isRecoilEnabled ? "" : "bg-yellow-400") : "bg-red-400"
+              }`}
+              style={isRecoilRunning && isRecoilEnabled ? { backgroundColor: accentColor } : undefined}
+            />
+            <p
+              className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                isRecoilRunning ? (isRecoilEnabled ? "" : "text-yellow-300") : "text-red-300"
+              }`}
+              style={isRecoilRunning && isRecoilEnabled ? { color: accentColor } : undefined}
+            >
+              {isRecoilRunning
+                ? isRecoilEnabled
+                  ? `ENGINE ON ${runtimeScope} G${(verticalStrength[0] ?? 1.0).toFixed(2)} I${(horizontalStrength[0] ?? 10).toFixed(1)}`
+                  : "ENGINE PAUSED"
+                : "ENGINE OFFLINE"}
+            </p>
+          </div>
           <div className="space-y-0">
             <div className="p-3.5">
               <div className="mb-2.5 flex items-end justify-between">
                 <p className="text-base font-semibold text-zinc-100">
-                  Vertical Control
+                  Global Scale
                 </p>
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    aria-label="Decrease vertical offset"
-                    onPointerDown={() => startOffsetHold("vertical", -0.1)}
+                    aria-label="Decrease global scale"
+                    onPointerDown={() => startOffsetHold("vertical", -0.01)}
                     onPointerUp={clearSliderHoldInterval}
                     onPointerLeave={clearSliderHoldInterval}
                     onPointerCancel={clearSliderHoldInterval}
@@ -864,7 +1335,7 @@ export default function SystemPage() {
                       }
                       if (event.key === "Escape") {
                         event.preventDefault();
-                        setVerticalOffsetInput(formatOffsetValue(verticalStrength[0]));
+                        setVerticalOffsetInput(formatOffsetValue(verticalStrength[0], 2));
                         setIsVerticalInputEditing(false);
                         event.currentTarget.blur();
                       }
@@ -874,8 +1345,8 @@ export default function SystemPage() {
                   />
                   <button
                     type="button"
-                    aria-label="Increase vertical offset"
-                    onPointerDown={() => startOffsetHold("vertical", 0.1)}
+                    aria-label="Increase global scale"
+                    onPointerDown={() => startOffsetHold("vertical", 0.01)}
                     onPointerUp={clearSliderHoldInterval}
                     onPointerLeave={clearSliderHoldInterval}
                     onPointerCancel={clearSliderHoldInterval}
@@ -887,10 +1358,10 @@ export default function SystemPage() {
               </div>
               <Slider
                 value={verticalStrength}
-                onValueChange={(value) => setVerticalStrength(normalizeSliderValue(value))}
-                min={1}
-                max={100}
-                step={0.1}
+                onValueChange={(value) => setVerticalStrength(normalizeGlobalScale(value))}
+                min={0}
+                max={3}
+                step={0.01}
                 className="w-full [&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:bg-linear-to-r [&_[data-slot=slider-track]]:from-white/20 [&_[data-slot=slider-track]]:via-white/35 [&_[data-slot=slider-track]]:to-white/20 [&_[data-slot=slider-range]]:bg-linear-to-r [&_[data-slot=slider-range]]:from-white [&_[data-slot=slider-range]]:via-zinc-200 [&_[data-slot=slider-range]]:to-zinc-500 [&_[data-slot=slider-thumb]]:size-3.5 [&_[data-slot=slider-thumb]]:border-white/90 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-thumb]]:shadow-none"
               />
             </div>
@@ -898,12 +1369,12 @@ export default function SystemPage() {
             <div className="p-3.5">
               <div className="mb-2.5 flex items-end justify-between">
                 <p className="text-base font-semibold text-zinc-100">
-                  Horizontal Control
+                  Step Interval (ms)
                 </p>
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
-                    aria-label="Decrease horizontal offset"
+                    aria-label="Decrease step interval"
                     onPointerDown={() => startOffsetHold("horizontal", -0.1)}
                     onPointerUp={clearSliderHoldInterval}
                     onPointerLeave={clearSliderHoldInterval}
@@ -929,7 +1400,7 @@ export default function SystemPage() {
                       }
                       if (event.key === "Escape") {
                         event.preventDefault();
-                        setHorizontalOffsetInput(formatOffsetValue(horizontalStrength[0]));
+                        setHorizontalOffsetInput(formatOffsetValue(horizontalStrength[0], 1));
                         setIsHorizontalInputEditing(false);
                         event.currentTarget.blur();
                       }
@@ -939,7 +1410,7 @@ export default function SystemPage() {
                   />
                   <button
                     type="button"
-                    aria-label="Increase horizontal offset"
+                    aria-label="Increase step interval"
                     onPointerDown={() => startOffsetHold("horizontal", 0.1)}
                     onPointerUp={clearSliderHoldInterval}
                     onPointerLeave={clearSliderHoldInterval}
@@ -952,9 +1423,9 @@ export default function SystemPage() {
               </div>
               <Slider
                 value={horizontalStrength}
-                onValueChange={(value) => setHorizontalStrength(normalizeSliderValue(value))}
-                min={1}
-                max={100}
+                onValueChange={(value) => setHorizontalStrength(normalizeStepInterval(value))}
+                min={6}
+                max={16}
                 step={0.1}
                 className="w-full [&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:bg-linear-to-r [&_[data-slot=slider-track]]:from-white/20 [&_[data-slot=slider-track]]:via-white/35 [&_[data-slot=slider-track]]:to-white/20 [&_[data-slot=slider-range]]:bg-linear-to-r [&_[data-slot=slider-range]]:from-white [&_[data-slot=slider-range]]:via-zinc-200 [&_[data-slot=slider-range]]:to-zinc-500 [&_[data-slot=slider-thumb]]:size-3.5 [&_[data-slot=slider-thumb]]:border-white/90 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-thumb]]:shadow-none"
               />
@@ -962,6 +1433,16 @@ export default function SystemPage() {
           </div>
 
           <div className="absolute bottom-6 right-6 flex items-center gap-3">
+            <Button
+              onClick={() => void toggleRecoilRuntime()}
+              className={`h-10 min-w-22 rounded-md border-0 px-6 text-sm font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_6px_20px_rgba(0,0,0,0.4)] transition duration-200 active:scale-[0.98] ${
+                isRecoilEnabled
+                  ? "bg-linear-to-b from-red-900/95 via-red-900/75 to-red-950/95 text-red-100 hover:from-red-800/95 hover:via-red-800/75 hover:to-red-900/95"
+                  : "bg-linear-to-b from-emerald-900/95 via-emerald-900/75 to-emerald-950/95 text-emerald-100 hover:from-emerald-800/95 hover:via-emerald-800/75 hover:to-emerald-900/95"
+              }`}
+            >
+              {isRecoilEnabled ? "OFF" : "ON"}
+            </Button>
             <Button
               onClick={saveCurrentConfig}
               className="h-10 min-w-22 rounded-md border-0 bg-linear-to-b from-zinc-900/95 via-zinc-900/75 to-zinc-950/95 px-6 text-sm font-semibold text-zinc-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_6px_20px_rgba(0,0,0,0.4)] backdrop-blur-md transition duration-200 hover:from-zinc-800/95 hover:via-zinc-800/75 hover:to-zinc-900/95 active:scale-[0.98]"
@@ -1027,13 +1508,6 @@ export default function SystemPage() {
             <p className="mt-2 text-[11px] text-red-300/90">{hotkeyNotice}</p>
           ) : null}
 
-          <div className="absolute bottom-7 left-1/2 flex -translate-x-1/2 items-center gap-1.5">
-            <span className="status-pulse-green inline-block h-1.5 w-1.5 rounded-full bg-green-400" />
-            <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-green-300">
-              UNDETECTED
-            </p>
-          </div>
-
           <div className="absolute bottom-23 left-1/2 h-[72px] w-[146px] -translate-x-1/2 overflow-hidden rounded-md bg-black/30 shadow-[0_12px_30px_rgba(0,0,0,0.55),0_0_26px_rgba(0,0,0,0.48)]">
             {!loadedDiscordSlides[discordSlideIndex] ? (
               <div className="absolute inset-0 animate-pulse bg-linear-to-r from-zinc-900/80 via-zinc-800/60 to-zinc-900/80" />
@@ -1079,6 +1553,13 @@ export default function SystemPage() {
               </svg>
             </a>
           </div>
+
+          <div className="absolute bottom-7 left-1/2 flex -translate-x-1/2 items-center gap-1.5">
+            <span className="status-pulse-green inline-block h-1.5 w-1.5 rounded-full bg-green-400" />
+            <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-green-300">
+              UNDETECTED
+            </p>
+          </div>
         </section>
       </main>
 
@@ -1104,9 +1585,9 @@ export default function SystemPage() {
             onClick={(event) => event.stopPropagation()}
             className="animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-200 relative w-full max-w-2xl overflow-hidden border border-white/10 bg-gradient-to-b from-white/8 via-zinc-950/55 to-black/65 shadow-[0_22px_90px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl"
           >
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.10),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.06),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-            <div className="pointer-events-none absolute -left-12 top-4 h-28 w-28 rounded-full bg-white/7 blur-3xl" />
-            <div className="pointer-events-none absolute -right-10 bottom-4 h-32 w-32 rounded-full bg-white/5 blur-3xl" />
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.028),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.014),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
+            <div className="pointer-events-none absolute -left-12 top-4 h-28 w-28 rounded-full bg-white/[0.01] blur-3xl" />
+            <div className="pointer-events-none absolute -right-10 bottom-4 h-32 w-32 rounded-full bg-white/[0.005] blur-3xl" />
 
             <div className="relative z-10 flex items-center justify-between border-b border-white/10 px-3.5 py-2.5">
               <div>
@@ -1249,9 +1730,9 @@ export default function SystemPage() {
         }`}
       >
         <div className="relative h-full w-full overflow-hidden rounded-none border border-white/10 bg-gradient-to-b from-white/8 via-zinc-950/55 to-black/65 p-6 text-zinc-100 shadow-[0_22px_90px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.11),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.07),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/8 blur-3xl" />
-          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/6 blur-3xl" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.03),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.016),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
+          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
+          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
 
           <div className="relative z-10 mx-auto flex h-full w-full max-w-sm items-center">
             <div className="w-full text-left">

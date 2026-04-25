@@ -2,8 +2,11 @@ use aes_gcm::aead::{Aead, OsRng};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+mod recoil;
+use recoil::{EngineStatus, RecoilEngine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -114,10 +117,70 @@ fn load_secure_settings(app: tauri::AppHandle) -> Result<Option<String>, String>
   Ok(Some(as_text))
 }
 
+#[tauri::command]
+fn recoil_start(engine: tauri::State<'_, RecoilEngine>) -> Result<(), String> {
+  engine.start()
+}
+
+#[tauri::command]
+fn recoil_stop(engine: tauri::State<'_, RecoilEngine>) -> Result<(), String> {
+  engine.stop()
+}
+
+#[tauri::command]
+fn recoil_set_enabled(engine: tauri::State<'_, RecoilEngine>, enabled: bool) -> Result<(), String> {
+  engine.set_enabled(enabled)
+}
+
+#[tauri::command]
+fn recoil_toggle_enabled(engine: tauri::State<'_, RecoilEngine>) -> Result<bool, String> {
+  engine.toggle_enabled()
+}
+
+#[tauri::command]
+fn recoil_set_scope(engine: tauri::State<'_, RecoilEngine>, scope: String) -> Result<(), String> {
+  engine.set_scope(&scope)
+}
+
+#[tauri::command]
+fn recoil_update_settings(
+  engine: tauri::State<'_, RecoilEngine>,
+  global_scale: f64,
+  step_interval_ms: f64,
+) -> Result<(), String> {
+  engine.set_settings(global_scale, step_interval_ms)
+}
+
+#[tauri::command]
+fn recoil_update_hotkeys(
+  engine: tauri::State<'_, RecoilEngine>,
+  hotkeys: HashMap<String, String>,
+) -> Result<(), String> {
+  engine.set_hotkeys(hotkeys)
+}
+
+#[tauri::command]
+fn recoil_status(engine: tauri::State<'_, RecoilEngine>) -> Result<EngineStatus, String> {
+  engine.status()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  let recoil_engine = RecoilEngine::default();
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![save_secure_settings, load_secure_settings])
+    .manage(recoil_engine)
+    .invoke_handler(tauri::generate_handler![
+      save_secure_settings,
+      load_secure_settings,
+      recoil_start,
+      recoil_stop,
+      recoil_set_enabled,
+      recoil_toggle_enabled,
+      recoil_set_scope,
+      recoil_update_settings,
+      recoil_update_hotkeys,
+      recoil_status
+    ])
     .setup(|app| {
       let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
       let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

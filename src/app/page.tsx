@@ -16,8 +16,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SoundToggleButton } from "@/components/sound-toggle-button";
 import { isSoundEnabled } from "@/lib/sound-settings";
+import { readSystemSettings } from "@/lib/system-settings-storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+
+type SoundTone = "guitar" | "piano" | "soft";
+type PianoSample = { freq: number; file: string };
+
+const pianoSamples: PianoSample[] = [
+  { freq: 196.0, file: "/sfx/piano-real/G3.mp3" },
+  { freq: 246.94, file: "/sfx/piano-real/B3.mp3" },
+  { freq: 261.63, file: "/sfx/piano-real/C4.mp3" },
+  { freq: 293.66, file: "/sfx/piano-real/D4.mp3" },
+  { freq: 329.63, file: "/sfx/piano-real/E4.mp3" },
+  { freq: 349.23, file: "/sfx/piano-real/F4.mp3" },
+  { freq: 369.99, file: "/sfx/piano-real/Gb4.mp3" },
+  { freq: 392.0, file: "/sfx/piano-real/G4.mp3" },
+  { freq: 440.0, file: "/sfx/piano-real/A4.mp3" },
+  { freq: 493.88, file: "/sfx/piano-real/B4.mp3" },
+  { freq: 523.25, file: "/sfx/piano-real/C5.mp3" },
+];
 
 async function handleCloseWindow() {
   try {
@@ -27,40 +45,154 @@ async function handleCloseWindow() {
   }
 }
 
-function playLoginSuccessBeep() {
+function playLoginSuccessBeep(soundTone: SoundTone) {
   if (!isSoundEnabled()) return;
-  const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+  if (soundTone === "piano") {
+    playPianoSample(196, 0, 0.64); // G3
+    playPianoSample(247, 0.055, 0.6); // B3
+    playPianoSample(294, 0.105, 0.56); // D4
+    return;
+  }
+
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass) return;
-
   const context = new AudioContextClass();
-  const oscillator = context.createOscillator();
-  const gainNode = context.createGain();
+  playToneSynth(context, soundTone, 196, 0.18, 0); // G3
+  playToneSynth(context, soundTone, 247, 0.15, 0.055); // B3
+  playToneSynth(context, soundTone, 294, 0.12, 0.105); // D4
 
-  oscillator.type = "sine";
-  oscillator.frequency.setValueAtTime(2100, context.currentTime);
-  oscillator.frequency.exponentialRampToValueAtTime(2650, context.currentTime + 0.09);
-
-  gainNode.gain.setValueAtTime(0.0001, context.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.66, context.currentTime + 0.012);
-  gainNode.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.13);
-
-  oscillator.connect(gainNode);
-  gainNode.connect(context.destination);
-  oscillator.start();
-  oscillator.stop(context.currentTime + 0.14);
-
-  oscillator.onended = () => {
+  window.setTimeout(() => {
     void context.close();
-  };
+  }, 320);
+}
+
+function nearestPianoSample(freq: number) {
+  let nearest = pianoSamples[0];
+  for (const sample of pianoSamples) {
+    if (Math.abs(sample.freq - freq) < Math.abs((nearest?.freq ?? 0) - freq)) {
+      nearest = sample;
+    }
+  }
+  return nearest;
+}
+
+function playPianoSample(freq: number, offsetSec: number, volume: number) {
+  window.setTimeout(() => {
+    const sample = nearestPianoSample(freq);
+    const audio = new Audio(sample.file);
+    audio.volume = volume;
+    void audio.play().catch(() => {
+      // Ignore autoplay-style failures for transient UI sound.
+    });
+  }, offsetSec * 1000);
+}
+
+function playToneSynth(
+  context: AudioContext,
+  soundTone: SoundTone,
+  freq: number,
+  duration: number,
+  offsetSec: number
+) {
+  if (soundTone === "soft") {
+    playSoftTone(context, freq, duration, offsetSec);
+    return;
+  }
+  playGuitarPluck(context, freq, duration, offsetSec);
+}
+
+function playGuitarPluck(context: AudioContext, freq: number, duration: number, offsetSec: number) {
+  const t0 = context.currentTime + offsetSec;
+  const osc = context.createOscillator();
+  const body = context.createBiquadFilter();
+  const pick = context.createBiquadFilter();
+  const amp = context.createGain();
+  const pickAmp = context.createGain();
+
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(freq, t0);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(60, freq * 0.995), t0 + duration);
+
+  body.type = "lowpass";
+  body.frequency.setValueAtTime(2800, t0);
+  body.Q.value = 0.8;
+
+  pick.type = "highpass";
+  pick.frequency.setValueAtTime(1900, t0);
+  pick.Q.value = 0.7;
+
+  amp.gain.setValueAtTime(0.0001, t0);
+  amp.gain.exponentialRampToValueAtTime(0.24, t0 + 0.006);
+  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+
+  pickAmp.gain.setValueAtTime(0.16, t0);
+  pickAmp.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.022);
+
+  osc.connect(body);
+  body.connect(amp);
+  amp.connect(context.destination);
+
+  osc.connect(pick);
+  pick.connect(pickAmp);
+  pickAmp.connect(context.destination);
+
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.01);
+}
+
+function playSoftTone(context: AudioContext, freq: number, duration: number, offsetSec: number) {
+  const t0 = context.currentTime + offsetSec;
+  const osc = context.createOscillator();
+  const body = context.createBiquadFilter();
+  const amp = context.createGain();
+
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(freq, t0);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(50, freq * 0.99), t0 + duration);
+
+  body.type = "lowpass";
+  body.frequency.setValueAtTime(1700, t0);
+  body.Q.value = 0.4;
+
+  amp.gain.setValueAtTime(0.0001, t0);
+  amp.gain.exponentialRampToValueAtTime(0.14, t0 + 0.008);
+  amp.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+
+  osc.connect(body);
+  body.connect(amp);
+  amp.connect(context.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.01);
 }
 
 export default function Home() {
   const router = useRouter();
+  const [soundTone, setSoundTone] = useState<SoundTone>("guitar");
   const [isWindowReady, setIsWindowReady] = useState(false);
   const [isBooting, setIsBooting] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    async function hydrateSoundTone() {
+      const parsed = await readSystemSettings();
+      if (
+        parsed?.soundTone === "guitar" ||
+        parsed?.soundTone === "piano" ||
+        parsed?.soundTone === "soft"
+      ) {
+        setSoundTone(parsed.soundTone);
+      } else if (parsed?.soundTone === "metal") {
+        // Backward compatibility: old "metal" maps to new "piano".
+        setSoundTone("piano");
+      }
+    }
+    void hydrateSoundTone();
+  }, []);
 
   useEffect(() => {
     async function setupLoginWindow() {
@@ -129,7 +261,7 @@ export default function Home() {
     event.preventDefault();
     if (isNavigating) return;
     setIsNavigating(true);
-    playLoginSuccessBeep();
+    playLoginSuccessBeep(soundTone);
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -162,9 +294,9 @@ export default function Home() {
     >
       {isBooting ? null : (
         <>
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.11),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.07),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/8 blur-3xl" />
-          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/6 blur-3xl" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.03),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.016),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
+          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
+          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
         </>
       )}
 
@@ -173,9 +305,9 @@ export default function Home() {
           showLogin ? "opacity-100 blur-0" : "opacity-0 blur-[2px]"
         }`}
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.11),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.07),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-        <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/8 blur-3xl" />
-        <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/6 blur-3xl" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.03),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.016),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
+        <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
+        <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
 
         {isNavigating ? (
           <div className="pointer-events-none absolute inset-0 z-50 bg-black/70" />
@@ -195,13 +327,13 @@ export default function Home() {
 
         <CardHeader className="relative z-10 px-4 pt-6 sm:px-6 sm:pt-7">
           <p className="text-xs uppercase tracking-[0.24em] text-zinc-400">
-            Desktop Access
+            Universal Control
           </p>
           <CardTitle className="mt-2 text-xl font-semibold text-white sm:text-2xl">
-            Enter your license key
+            Enter access key
           </CardTitle>
           <p className="mt-1 text-xs text-zinc-400 sm:text-sm">
-            Use your key to unlock this desktop application.
+            Use your key to unlock this control panel.
           </p>
         </CardHeader>
 
@@ -212,7 +344,7 @@ export default function Home() {
           >
             <div className="space-y-2">
               <Label htmlFor="license-key" className="text-zinc-200">
-                License Key
+                Access Key
               </Label>
               <Input
                 id="license-key"
@@ -232,7 +364,7 @@ export default function Home() {
         </CardContent>
 
         <CardFooter className="relative z-10 mt-auto border-zinc-800 bg-transparent px-4 py-3 text-[11px] text-zinc-400 sm:px-6 sm:py-4 sm:text-xs">
-          Version 0.1.0 - Desktop build (Tauri target)
+          Version 0.1.0 - Universal Control build
         </CardFooter>
       </Card>
 
@@ -242,14 +374,14 @@ export default function Home() {
         }`}
       >
         <Card className="relative h-full w-full overflow-hidden rounded-none border border-white/10 bg-gradient-to-b from-white/8 via-zinc-950/55 to-black/65 p-6 text-zinc-100 shadow-[0_22px_90px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl">
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.11),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.07),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/8 blur-3xl" />
-          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/6 blur-3xl" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.03),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.016),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
+          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
+          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
 
           <div className="relative z-10 mx-auto flex h-full w-full max-w-sm items-center">
             <div className="w-full text-left">
               <p className="text-xs uppercase tracking-[0.24em] text-zinc-400">
-                Desktop Access
+                Universal Control
               </p>
               <p className="mt-2 text-xl font-semibold text-white">Launching App</p>
               <p className="mt-1 text-xs text-zinc-400">

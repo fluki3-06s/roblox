@@ -19,8 +19,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PUBG Desktop Auth",
-  description: "Desktop authentication and license gateway",
+  title: "Universal Control",
+  description: "Universal control and access gateway",
 };
 
 export default function RootLayout({
