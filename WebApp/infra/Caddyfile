@@ -1,0 +1,11 @@
+# Strygon API - Caddy Reverse Proxy
+# Auto SSL via Let's Encrypt
+
+api.yourdomain.com {
+    reverse_proxy localhost:8080
+
+    log {
+        output file /var/log/caddy/api.log
+        format json
+    }
+}

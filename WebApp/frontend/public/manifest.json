@@ -1,0 +1,17 @@
+{
+  "name": "Strygon",
+  "short_name": "Strygon",
+  "description": "Premium Roblox script hub. Free keys for Aimbot, ESP & FPS scripts.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "icons": [
+    {
+      "src": "/assets/logo/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
