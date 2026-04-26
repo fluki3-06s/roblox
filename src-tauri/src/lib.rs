@@ -44,51 +44,64 @@ struct AppUiState {
 
 fn mode_to_scope(mode: &str) -> Option<&'static str> {
   match mode.trim().to_uppercase().as_str() {
-    "REDDOT" | "RED DOT" => Some("Red Dot"),
-    "SCOPE X2" | "X2" => Some("x2"),
-    "SCOPE X3" | "X3" => Some("x3"),
-    "SCOPE X4" | "X4" => Some("x4"),
-    "SCOPE X6" | "X6" => Some("x6"),
+    "REDDOT" | "RED DOT" | "SCOPE CLOSE" => Some("Red Dot"),
+    "SCOPE X2" | "X2" | "SCOPE SHORT" => Some("x2"),
+    "SCOPE X3" | "X3" | "SCOPE MID" => Some("x3"),
+    "SCOPE X4" | "X4" | "SCOPE LONG" => Some("x4"),
+    "SCOPE X6" | "X6" | "SCOPE EXTREME" => Some("x6"),
     _ => None,
   }
 }
 
 fn hotkey_token_to_shortcut(token: &str) -> Option<Shortcut> {
   let normalized = token.trim().to_uppercase();
-  let candidate = if let Some(rest) = normalized.strip_prefix("KEY") {
+  let candidates: Vec<String> = if let Some(rest) = normalized.strip_prefix("KEY") {
     if rest.len() == 1 && rest.chars().all(|ch| ch.is_ascii_alphabetic()) {
-      rest.to_string()
+      vec![rest.to_string()]
     } else {
       return None;
     }
   } else if let Some(rest) = normalized.strip_prefix("DIGIT") {
     if rest.len() == 1 && rest.chars().all(|ch| ch.is_ascii_digit()) {
-      rest.to_string()
+      vec![rest.to_string()]
     } else {
       return None;
     }
   } else {
     match normalized.as_str() {
-      "ARROWUP" => "Up".to_string(),
-      "ARROWDOWN" => "Down".to_string(),
-      "ARROWLEFT" => "Left".to_string(),
-      "ARROWRIGHT" => "Right".to_string(),
-      "SPACE" => "Space".to_string(),
-      "TAB" => "Tab".to_string(),
-      "ENTER" | "NUMENTER" => "Enter".to_string(),
-      "ESCAPE" => "Escape".to_string(),
-      "BACKSPACE" => "Backspace".to_string(),
-      "DELETE" => "Delete".to_string(),
-      "INSERT" => "Insert".to_string(),
-      "HOME" => "Home".to_string(),
-      "END" => "End".to_string(),
-      "PAGEUP" => "PageUp".to_string(),
-      "PAGEDOWN" => "PageDown".to_string(),
-      _ => normalized,
+      "-" => vec!["Minus".to_string()],
+      "=" => vec!["Equal".to_string()],
+      "[" => vec!["BracketLeft".to_string()],
+      "]" => vec!["BracketRight".to_string()],
+      ";" => vec!["Semicolon".to_string()],
+      "'" => vec!["Quote".to_string()],
+      "," => vec!["Comma".to_string()],
+      "." => vec!["Period".to_string()],
+      "/" => vec!["Slash".to_string()],
+      "\\" => vec!["Backslash".to_string()],
+      "`" => vec!["Backquote".to_string()],
+      "ARROWUP" => vec!["ArrowUp".to_string(), "Up".to_string()],
+      "ARROWDOWN" => vec!["ArrowDown".to_string(), "Down".to_string()],
+      "ARROWLEFT" => vec!["ArrowLeft".to_string(), "Left".to_string()],
+      "ARROWRIGHT" => vec!["ArrowRight".to_string(), "Right".to_string()],
+      "SPACE" => vec!["Space".to_string()],
+      "TAB" => vec!["Tab".to_string()],
+      "ENTER" | "NUMENTER" => vec!["Enter".to_string()],
+      "ESCAPE" => vec!["Escape".to_string()],
+      "BACKSPACE" => vec!["Backspace".to_string()],
+      "DELETE" => vec!["Delete".to_string()],
+      "INSERT" => vec!["Insert".to_string()],
+      "HOME" => vec!["Home".to_string()],
+      "END" => vec!["End".to_string()],
+      "PAGEUP" => vec!["PageUp".to_string()],
+      "PAGEDOWN" => vec!["PageDown".to_string()],
+      _ => vec![normalized],
     }
   };
 
-  Shortcut::from_str(&candidate).ok()
+  candidates
+    .into_iter()
+    .find_map(|candidate| Shortcut::from_str(&candidate).ok())
 }
 
 fn register_global_hotkeys(
@@ -117,10 +130,10 @@ fn register_global_hotkeys(
       continue;
     };
 
-    app
-      .global_shortcut()
-      .register(shortcut.clone())
-      .map_err(|error| format!("failed to register global shortcut {token}: {error}"))?;
+    if let Err(error) = app.global_shortcut().register(shortcut.clone()) {
+      log::warn!("failed to register global shortcut {token}: {error}");
+      continue;
+    }
     registered_scope_shortcuts.push(shortcut.clone());
     shortcuts_to_scope.insert(shortcut.to_string().to_uppercase(), scope.to_string());
   }
@@ -318,6 +331,7 @@ pub fn run() {
           if event.state != ShortcutState::Pressed {
             return;
           }
+          log::info!("global shortcut pressed: {}", shortcut);
           if shortcut.to_string().eq_ignore_ascii_case(EMERGENCY_RESTORE_SHORTCUT) {
             let ui_state = app.state::<AppUiState>();
             if let Some(window) = app.get_webview_window("main") {
@@ -340,10 +354,13 @@ pub fn run() {
             guard.get(&shortcut.to_string().to_uppercase()).cloned()
           };
           let Some(scope) = scope else {
+            log::info!("global shortcut has no mapped scope: {}", shortcut);
             return;
           };
           let engine = app.state::<RecoilEngine>();
-          let _ = engine.set_scope(&scope);
+          if engine.set_scope(&scope).is_ok() {
+            log::info!("global shortcut switched scope -> {}", scope);
+          }
         })
         .build(),
     )
@@ -364,6 +381,13 @@ pub fn run() {
       set_streamer_mode
     ])
     .setup(|app| {
+      {
+        let engine = app.state::<RecoilEngine>();
+        if let Err(error) = engine.start() {
+          log::warn!("failed to auto-start recoil engine: {error}");
+        }
+      }
+
       let trial_icon = load_trial_icon()?;
       let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
       let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

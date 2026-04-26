@@ -9,6 +9,7 @@ export type BackgroundEffectStyle = "network" | "evil-eye" | "particles";
 export type PersistedSystemSettings = {
   verticalStrength?: number[];
   horizontalStrength?: number[];
+  scopeStrengths?: Record<string, { vertical?: number; horizontal?: number }>;
   selectedMode?: string;
   uiAccentColor?: string;
   backgroundEffect?: BackgroundEffectStyle;
@@ -19,8 +20,9 @@ export type PersistedSystemSettings = {
   savedConfigs?: Array<{
     id: string;
     name: string;
-    vertical: number;
-    horizontal: number;
+    vertical?: number;
+    horizontal?: number;
+    scopeStrengths?: Record<string, { vertical?: number; horizontal?: number }>;
     hotkeys?: Record<string, string>;
     createdAt?: number;
   }>;

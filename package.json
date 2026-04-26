@@ -9,6 +9,8 @@
     "lint": "eslint",
     "tauri": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri",
     "tauri:dev": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri dev",
+    "tauri:dev:admin": "powershell -ExecutionPolicy Bypass -File .\\scripts\\tauri-dev-admin.ps1 -NoPause",
+    "tauri:dev:admin:uac": "wscript .\\scripts\\tauri-dev-admin.vbs",
     "tauri:build": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri build"
   },
   "dependencies": {

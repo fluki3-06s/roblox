@@ -23,6 +23,7 @@ import {
 import { isSoundEnabled } from "@/lib/sound-settings";
 import {
   type BackgroundEffectStyle,
+  type PersistedSystemSettings,
   readSystemSettings,
   writeSystemSettings,
 } from "@/lib/system-settings-storage";
@@ -72,13 +73,19 @@ const recoilScopeToUiMode: Record<"Red Dot" | "x2" | "x3" | "x4" | "x6", string>
 type ConfigPreset = {
   id: string;
   name: string;
-  vertical: number;
-  horizontal: number;
+  vertical?: number;
+  horizontal?: number;
+  scopeStrengths?: ScopeStrengthMap;
   hotkeys?: Record<string, string>;
   createdAt: number;
 };
 
 const initialSavedConfigs: ConfigPreset[] = [];
+type ScopeStrength = {
+  vertical: number;
+  horizontal: number;
+};
+type ScopeStrengthMap = Record<string, ScopeStrength>;
 type SoundTone = "guitar" | "piano" | "soft";
 type PianoSample = { freq: number; file: string };
 
@@ -193,6 +200,86 @@ function getModeLabel(mode: string) {
 
 function normalizeHotkeyToken(value: string) {
   return value.trim().toUpperCase();
+}
+
+function normalizeStoredModeKey(mode: string): string | null {
+  const normalized = mode.trim().toUpperCase();
+  switch (normalized) {
+    case "REDDOT":
+    case "RED DOT":
+    case "SCOPE CLOSE":
+      return "Reddot";
+    case "SCOPE X2":
+    case "X2":
+    case "SCOPE SHORT":
+      return "SCOPE X2";
+    case "SCOPE X3":
+    case "X3":
+    case "SCOPE MID":
+      return "SCOPE X3";
+    case "SCOPE X4":
+    case "X4":
+    case "SCOPE LONG":
+      return "SCOPE X4";
+    case "SCOPE X6":
+    case "X6":
+    case "SCOPE EXTREME":
+      return "SCOPE X6";
+    default:
+      return null;
+  }
+}
+
+function normalizeStoredHotkeyLabel(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.toUpperCase();
+
+  if (/^KEY[A-Z]$/.test(normalized)) return normalized.slice(3);
+  if (/^DIGIT[0-9]$/.test(normalized)) return normalized.slice(5);
+  if (/^F[0-9]{1,2}$/.test(normalized)) return normalized;
+
+  const aliasMap: Record<string, string> = {
+    UP: "ArrowUp",
+    DOWN: "ArrowDown",
+    LEFT: "ArrowLeft",
+    RIGHT: "ArrowRight",
+    ARROWUP: "ArrowUp",
+    ARROWDOWN: "ArrowDown",
+    ARROWLEFT: "ArrowLeft",
+    ARROWRIGHT: "ArrowRight",
+    MOUSE4: "Mouse4",
+    "MOUSE 4": "Mouse4",
+    MOUSE5: "Mouse5",
+    "MOUSE 5": "Mouse5",
+    SPACEBAR: "Space",
+    RETURN: "Enter",
+    ESC: "Escape",
+  };
+  if (aliasMap[normalized]) return aliasMap[normalized];
+
+  if (trimmed.length === 1) return trimmed.toUpperCase();
+  return trimmed;
+}
+
+function normalizePersistedHotkeys(raw: unknown): Record<string, string> {
+  const next: Record<string, string> = { ...defaultHotkeys };
+  if (!raw || typeof raw !== "object") return next;
+
+  for (const [mode, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== "string") continue;
+    const normalizedMode = normalizeStoredModeKey(mode);
+    const normalizedHotkey = normalizeStoredHotkeyLabel(value);
+    if (!normalizedMode || !normalizedHotkey) continue;
+    next[normalizedMode] = normalizedHotkey;
+  }
+  return next;
+}
+
+function isUsingDefaultHotkeys(hotkeys: Record<string, string>) {
+  return Object.entries(defaultHotkeys).every(
+    ([mode, value]) => normalizeHotkeyToken(hotkeys[mode] ?? "") === normalizeHotkeyToken(value)
+  );
 }
 
 function isValidHexColor(value: string) {
@@ -399,6 +486,65 @@ function convertLegacyStepInterval(value: number) {
   return Math.max(6, Math.min(16, Math.round(10 + ((value - 50) * 6) / 50)));
 }
 
+function createDefaultScopeStrengthMap(vertical: number = 1.0, horizontal: number = 10): ScopeStrengthMap {
+  return Object.fromEntries(
+    modeItems.map((mode) => [
+      mode,
+      {
+        vertical,
+        horizontal,
+      },
+    ])
+  ) as ScopeStrengthMap;
+}
+
+function normalizeScopeStrengthMap(raw: unknown, fallback?: ScopeStrengthMap): ScopeStrengthMap {
+  const base = fallback ?? createDefaultScopeStrengthMap();
+  if (!raw || typeof raw !== "object") return base;
+  const parsed = raw as Record<string, { vertical?: unknown; horizontal?: unknown }>;
+  return modeItems.reduce<ScopeStrengthMap>((acc, mode) => {
+    const candidate = parsed[mode];
+    const fallbackStrength = base[mode];
+    const vertical =
+      typeof candidate?.vertical === "number"
+        ? normalizeGlobalScale(candidate.vertical)[0] ?? fallbackStrength.vertical
+        : fallbackStrength.vertical;
+    const horizontal =
+      typeof candidate?.horizontal === "number"
+        ? normalizeStepInterval(candidate.horizontal)[0] ?? fallbackStrength.horizontal
+        : fallbackStrength.horizontal;
+    acc[mode] = { vertical, horizontal };
+    return acc;
+  }, {} as ScopeStrengthMap);
+}
+
+function buildScopeStrengthMapFromPreset(preset: ConfigPreset): ScopeStrengthMap {
+  const legacyVertical =
+    typeof preset.vertical === "number" ? convertLegacyGlobalScale(preset.vertical) : 1.0;
+  const legacyHorizontal =
+    typeof preset.horizontal === "number" ? convertLegacyStepInterval(preset.horizontal) : 10;
+  return normalizeScopeStrengthMap(
+    preset.scopeStrengths,
+    createDefaultScopeStrengthMap(legacyVertical, legacyHorizontal)
+  );
+}
+
+function getPresetStrengthForMode(
+  preset: ConfigPreset,
+  mode: string
+): {
+  vertical: number;
+  horizontal: number;
+} {
+  const mapped = buildScopeStrengthMapFromPreset(preset)[mode];
+  if (mapped) return mapped;
+  return {
+    vertical: typeof preset.vertical === "number" ? convertLegacyGlobalScale(preset.vertical) : 1.0,
+    horizontal:
+      typeof preset.horizontal === "number" ? convertLegacyStepInterval(preset.horizontal) : 10,
+  };
+}
+
 function formatDurationLabel(totalSeconds: number) {
   const clamped = Math.max(0, totalSeconds);
   const hours = Math.floor(clamped / 3600);
@@ -448,6 +594,7 @@ export default function SystemPage() {
   const [isPanelBooting, setIsPanelBooting] = useState(true);
   const [verticalStrength, setVerticalStrength] = useState([1.0]);
   const [horizontalStrength, setHorizontalStrength] = useState([10]);
+  const [scopeStrengths, setScopeStrengths] = useState<ScopeStrengthMap>(() => createDefaultScopeStrengthMap());
   const [selectedMode, setSelectedMode] = useState<string>(modeItems[0]);
   const [savedConfigs, setSavedConfigs] = useState<ConfigPreset[]>(initialSavedConfigs);
   const [hotkeys, setHotkeys] = useState<Record<string, string>>(defaultHotkeys);
@@ -481,12 +628,19 @@ export default function SystemPage() {
     "https://api.dicebear.com/9.x/adventurer-neutral/svg?seed=user-12&backgroundType=gradientLinear"
   );
   const hotkeySectionRef = useRef<HTMLElement | null>(null);
+  const hydratedHotkeysLoadedRef = useRef(false);
   const lastDuplicateToastAtRef = useRef(0);
   const userNameInputRef = useRef<HTMLInputElement | null>(null);
   const sliderHoldIntervalRef = useRef<number | null>(null);
   const sliderHoldStartTimeoutRef = useRef<number | null>(null);
   const recoilRecoveringRef = useRef(false);
   const pressedHotkeysRef = useRef<Set<string>>(new Set());
+  const scopeStrengthsRef = useRef<ScopeStrengthMap>(scopeStrengths);
+  const pendingScopeSwitchRef = useRef<{ scope: "Red Dot" | "x2" | "x3" | "x4" | "x6"; untilMs: number } | null>(
+    null
+  );
+  const latestSettingsPayloadRef = useRef<PersistedSystemSettings>({});
+  const settingsWriteRequestIdRef = useRef(0);
 
   function clearSliderHoldInterval() {
     if (sliderHoldStartTimeoutRef.current !== null) {
@@ -554,10 +708,28 @@ export default function SystemPage() {
     setSelectedMode(nextMode);
     playModeSwitchBeep(nextMode, soundTone);
     const recoilScope = uiModeToRecoilScope[nextMode] ?? "Red Dot";
+    pendingScopeSwitchRef.current = {
+      scope: recoilScope,
+      untilMs: Date.now() + 480,
+    };
     setRuntimeScope(recoilScope);
     void setRecoilScope(recoilScope).catch(() => {
       setActionNotice({ text: "Failed to switch scope", tone: "error" });
     });
+  }
+
+  function syncRuntimeScopeFromStatus(scope: "Red Dot" | "x2" | "x3" | "x4" | "x6") {
+    const pending = pendingScopeSwitchRef.current;
+    if (pending) {
+      if (scope === pending.scope) {
+        pendingScopeSwitchRef.current = null;
+      } else if (Date.now() < pending.untilMs) {
+        return;
+      } else {
+        pendingScopeSwitchRef.current = null;
+      }
+    }
+    setRuntimeScope(scope);
   }
 
   async function toggleRecoilRuntime() {
@@ -627,6 +799,37 @@ export default function SystemPage() {
   }, [discordPreviewSlides.length]);
 
   useEffect(() => {
+    scopeStrengthsRef.current = scopeStrengths;
+  }, [scopeStrengths]);
+
+  useEffect(() => {
+    const activeScopeStrength = scopeStrengthsRef.current[selectedMode];
+    if (!activeScopeStrength) return;
+    const nextVertical = normalizeGlobalScale(activeScopeStrength.vertical)[0] ?? 1.0;
+    const nextHorizontal = normalizeStepInterval(activeScopeStrength.horizontal)[0] ?? 10;
+    setVerticalStrength((prev) => ((prev[0] ?? 1.0) === nextVertical ? prev : [nextVertical]));
+    setHorizontalStrength((prev) => ((prev[0] ?? 10) === nextHorizontal ? prev : [nextHorizontal]));
+  }, [selectedMode]);
+
+  useEffect(() => {
+    const nextVertical = normalizeGlobalScale(verticalStrength)[0] ?? 1.0;
+    const nextHorizontal = normalizeStepInterval(horizontalStrength)[0] ?? 10;
+    setScopeStrengths((prev) => {
+      const current = prev[selectedMode];
+      if (current && current.vertical === nextVertical && current.horizontal === nextHorizontal) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [selectedMode]: {
+          vertical: nextVertical,
+          horizontal: nextHorizontal,
+        },
+      };
+    });
+  }, [selectedMode, verticalStrength, horizontalStrength]);
+
+  useEffect(() => {
     if (isVerticalInputEditing) return;
     setVerticalOffsetInput(formatOffsetValue(verticalStrength[0], 2));
   }, [verticalStrength, isVerticalInputEditing]);
@@ -667,10 +870,13 @@ export default function SystemPage() {
   }
 
   function applyPreset(preset: ConfigPreset) {
-    setVerticalStrength([preset.vertical]);
-    setHorizontalStrength([preset.horizontal]);
+    const presetScopeStrengths = buildScopeStrengthMapFromPreset(preset);
+    const activeStrength = presetScopeStrengths[selectedMode] ?? { vertical: 1.0, horizontal: 10 };
+    setScopeStrengths(presetScopeStrengths);
+    setVerticalStrength([activeStrength.vertical]);
+    setHorizontalStrength([activeStrength.horizontal]);
     if (preset.hotkeys && typeof preset.hotkeys === "object") {
-      setHotkeys({ ...defaultHotkeys, ...preset.hotkeys });
+      setHotkeys(normalizePersistedHotkeys(preset.hotkeys));
     }
     setUserName(preset.name.slice(0, 8));
     setDraftUserName(preset.name.slice(0, 8));
@@ -691,12 +897,14 @@ export default function SystemPage() {
     setSavedConfigs((prev) => {
       const existed = prev.find((item) => item.name === configName);
       if (existed) {
+        const activeScopeStrength = scopeStrengths[selectedMode] ?? { vertical: 1.0, horizontal: 10 };
         return prev.map((item) =>
           item.name === configName
             ? {
                 ...item,
-                vertical: verticalStrength[0] ?? 0,
-                horizontal: horizontalStrength[0] ?? 0,
+                vertical: activeScopeStrength.vertical,
+                horizontal: activeScopeStrength.horizontal,
+                scopeStrengths: normalizeScopeStrengthMap(scopeStrengths, createDefaultScopeStrengthMap()),
                 hotkeys: { ...hotkeys },
                 createdAt: Date.now(),
               }
@@ -704,11 +912,13 @@ export default function SystemPage() {
         );
       }
 
+      const activeScopeStrength = scopeStrengths[selectedMode] ?? { vertical: 1.0, horizontal: 10 };
       const created: ConfigPreset = {
         id: `cfg-${Date.now()}`,
         name: configName,
-        vertical: verticalStrength[0] ?? 0,
-        horizontal: horizontalStrength[0] ?? 0,
+        vertical: activeScopeStrength.vertical,
+        horizontal: activeScopeStrength.horizontal,
+        scopeStrengths: normalizeScopeStrengthMap(scopeStrengths, createDefaultScopeStrengthMap()),
         hotkeys: { ...hotkeys },
         createdAt: Date.now(),
       };
@@ -751,6 +961,10 @@ export default function SystemPage() {
     async function hydrateSettings() {
       try {
         const parsed = await readSystemSettings();
+        latestSettingsPayloadRef.current = {
+          ...latestSettingsPayloadRef.current,
+          ...(parsed ?? {}),
+        };
         if (!parsed) return;
 
         if (
@@ -767,6 +981,19 @@ export default function SystemPage() {
           setHorizontalStrength([convertLegacyStepInterval(parsed.horizontalStrength[0])]);
         }
 
+        const legacyVertical = Array.isArray(parsed.verticalStrength)
+          ? convertLegacyGlobalScale(parsed.verticalStrength[0] ?? 1.0)
+          : 1.0;
+        const legacyHorizontal = Array.isArray(parsed.horizontalStrength)
+          ? convertLegacyStepInterval(parsed.horizontalStrength[0] ?? 10)
+          : 10;
+        setScopeStrengths(
+          normalizeScopeStrengthMap(
+            parsed.scopeStrengths,
+            createDefaultScopeStrengthMap(legacyVertical, legacyHorizontal)
+          )
+        );
+
         if (typeof parsed.selectedMode === "string" && modeItems.includes(parsed.selectedMode)) {
           setSelectedMode(parsed.selectedMode);
         }
@@ -782,10 +1009,8 @@ export default function SystemPage() {
         }
 
         if (parsed.hotkeys && typeof parsed.hotkeys === "object") {
-          setHotkeys((prev) => ({
-            ...prev,
-            ...parsed.hotkeys,
-          }));
+          hydratedHotkeysLoadedRef.current = true;
+          setHotkeys(normalizePersistedHotkeys(parsed.hotkeys));
         }
 
         if (typeof parsed.userName === "string" && parsed.userName.trim()) {
@@ -798,6 +1023,21 @@ export default function SystemPage() {
           setSavedConfigs(
             parsed.savedConfigs.map((item) => ({
               ...item,
+              scopeStrengths: normalizeScopeStrengthMap(
+                item.scopeStrengths,
+                createDefaultScopeStrengthMap(
+                  typeof item.vertical === "number" ? convertLegacyGlobalScale(item.vertical) : 1.0,
+                  typeof item.horizontal === "number"
+                    ? convertLegacyStepInterval(item.horizontal)
+                    : 10
+                )
+              ),
+              vertical:
+                typeof item.vertical === "number" ? convertLegacyGlobalScale(item.vertical) : 1.0,
+              horizontal:
+                typeof item.horizontal === "number"
+                  ? convertLegacyStepInterval(item.horizontal)
+                  : 10,
               createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
             }))
           );
@@ -813,9 +1053,10 @@ export default function SystemPage() {
   useEffect(() => {
     if (!hasHydratedSettings) return;
 
-    const payload = {
+    const payload: PersistedSystemSettings = {
       verticalStrength,
       horizontalStrength,
+      scopeStrengths,
       selectedMode,
       uiAccentColor: accentColor,
       backgroundEffect,
@@ -823,11 +1064,16 @@ export default function SystemPage() {
       userName,
       savedConfigs,
     };
+    latestSettingsPayloadRef.current = {
+      ...latestSettingsPayloadRef.current,
+      ...payload,
+    };
 
     let cancelled = false;
+    const requestId = ++settingsWriteRequestIdRef.current;
     void (async () => {
-      const existing = (await readSystemSettings()) ?? {};
-      if (cancelled) return;
+      const existing = (await readSystemSettings()) ?? latestSettingsPayloadRef.current;
+      if (cancelled || requestId !== settingsWriteRequestIdRef.current) return;
       await writeSystemSettings({
         ...existing,
         ...payload,
@@ -840,6 +1086,7 @@ export default function SystemPage() {
     hasHydratedSettings,
     verticalStrength,
     horizontalStrength,
+    scopeStrengths,
     selectedMode,
     accentColor,
     backgroundEffect,
@@ -847,6 +1094,31 @@ export default function SystemPage() {
     userName,
     savedConfigs,
   ]);
+
+  useEffect(() => {
+    if (!hasHydratedSettings) return;
+
+    function persistLatestSnapshot() {
+      const snapshot = latestSettingsPayloadRef.current;
+      if (!snapshot) return;
+      void writeSystemSettings(snapshot);
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        persistLatestSnapshot();
+      }
+    }
+
+    window.addEventListener("beforeunload", persistLatestSnapshot);
+    window.addEventListener("pagehide", persistLatestSnapshot);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("beforeunload", persistLatestSnapshot);
+      window.removeEventListener("pagehide", persistLatestSnapshot);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [hasHydratedSettings]);
 
   useEffect(() => {
     // Demo countdown (6h 30m from now). Replace with your real expiry timestamp.
@@ -1081,11 +1353,10 @@ export default function SystemPage() {
       try {
         await startRecoilEngine();
         await setRecoilEnabled(true);
-        await updateRecoilHotkeys(hotkeys);
         const status = await readRecoilStatus();
         setIsRecoilEnabled(status.enabled);
         setIsRecoilRunning(status.running);
-        setRuntimeScope(status.scope);
+        syncRuntimeScopeFromStatus(status.scope);
       } catch {
         setActionNotice({ text: "Failed to start recoil engine", tone: "error" });
       }
@@ -1103,7 +1374,7 @@ export default function SystemPage() {
         .then((status) => {
           setIsRecoilEnabled(status.enabled);
           setIsRecoilRunning(status.running);
-          setRuntimeScope(status.scope);
+          syncRuntimeScopeFromStatus(status.scope);
           if (!status.running && !recoilRecoveringRef.current) {
             recoilRecoveringRef.current = true;
             void (async () => {
@@ -1113,7 +1384,7 @@ export default function SystemPage() {
                 const recovered = await readRecoilStatus();
                 setIsRecoilEnabled(recovered.enabled);
                 setIsRecoilRunning(recovered.running);
-                setRuntimeScope(recovered.scope);
+                syncRuntimeScopeFromStatus(recovered.scope);
               } catch {
                 // retry on next poll tick
               } finally {
@@ -1133,7 +1404,7 @@ export default function SystemPage() {
               const recovered = await readRecoilStatus();
               setIsRecoilEnabled(recovered.enabled);
               setIsRecoilRunning(recovered.running);
-              setRuntimeScope(recovered.scope);
+              syncRuntimeScopeFromStatus(recovered.scope);
             } catch {
               // retry on next poll tick
             } finally {
@@ -1154,19 +1425,17 @@ export default function SystemPage() {
   }, [runtimeScope, selectedMode]);
 
   useEffect(() => {
-    const recoilScope = uiModeToRecoilScope[selectedMode] ?? "Red Dot";
-    void setRecoilScope(recoilScope);
-  }, [selectedMode]);
-
-  useEffect(() => {
     const globalScale = normalizeGlobalScale(verticalStrength)[0] ?? 1.0;
     const stepInterval = normalizeStepInterval(horizontalStrength)[0] ?? 10;
     void updateRecoilSettings(globalScale, stepInterval);
   }, [verticalStrength, horizontalStrength]);
 
   useEffect(() => {
+    if (!hasHydratedSettings) return;
+    // Prevent first-boot default F1-F5 from overwriting user bindings.
+    if (!hydratedHotkeysLoadedRef.current && isUsingDefaultHotkeys(hotkeys)) return;
     void updateRecoilHotkeys(hotkeys);
-  }, [hotkeys]);
+  }, [hotkeys, hasHydratedSettings]);
 
   return (
     <div
@@ -1237,7 +1506,7 @@ export default function SystemPage() {
               >
                 <button
                   type="button"
-                  onPointerDown={() => setModeWithFeedback(item)}
+                  onClick={() => setModeWithFeedback(item)}
                   className="block w-full px-2.5 py-2 text-left"
                 >
                   <span
@@ -1732,8 +2001,11 @@ export default function SystemPage() {
                             <div>
                               <p className="text-sm font-semibold text-zinc-100">{preset.name}</p>
                               <p className="mt-0.5 text-[11px] text-zinc-400">
-                                V {formatOffsetValue(preset.vertical)} / H{" "}
-                                {formatOffsetValue(preset.horizontal)}
+                                V {formatOffsetValue(getPresetStrengthForMode(preset, selectedMode).vertical, 2)} / H{" "}
+                                {formatOffsetValue(
+                                  getPresetStrengthForMode(preset, selectedMode).horizontal,
+                                  1
+                                )}
                               </p>
                             </div>
                           </div>
@@ -1798,8 +2070,8 @@ export default function SystemPage() {
                         <div>
                           <p className="text-sm font-semibold text-zinc-100">{preset.name}</p>
                           <p className="mt-0.5 text-[11px] text-zinc-400">
-                            V {formatOffsetValue(preset.vertical)} / H{" "}
-                            {formatOffsetValue(preset.horizontal)}
+                            V {formatOffsetValue(getPresetStrengthForMode(preset, selectedMode).vertical, 2)} / H{" "}
+                            {formatOffsetValue(getPresetStrengthForMode(preset, selectedMode).horizontal, 1)}
                           </p>
                         </div>
                       </div>
