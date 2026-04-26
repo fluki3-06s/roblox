@@ -9,13 +9,134 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Mutex;
 use tauri::Manager;
 use tauri::{
+  image::Image,
   menu::{Menu, MenuItem},
-  tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+  tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const SECURE_SETTINGS_FILE: &str = "system-settings.secure";
+const TRIAL_ICON_1: &[u8] = include_bytes!("../icons/trial-icon-1.png");
+const EMERGENCY_RESTORE_SHORTCUT: &str = "Ctrl+Shift+F10";
+
+fn load_trial_icon() -> Result<Image<'static>, String> {
+  let decoded = image::load_from_memory(TRIAL_ICON_1)
+    .map_err(|error| format!("failed to decode trial icon png: {error}"))?;
+  let rgba = decoded.to_rgba8();
+  let (width, height) = rgba.dimensions();
+  Ok(Image::new_owned(rgba.into_raw(), width, height))
+}
+
+#[derive(Default)]
+struct GlobalHotkeyBindings {
+  shortcuts_to_scope: Mutex<HashMap<String, String>>,
+  registered_scope_shortcuts: Mutex<Vec<Shortcut>>,
+}
+
+#[derive(Default)]
+struct AppUiState {
+  tray_icon: Mutex<Option<TrayIcon>>,
+}
+
+fn mode_to_scope(mode: &str) -> Option<&'static str> {
+  match mode.trim().to_uppercase().as_str() {
+    "REDDOT" | "RED DOT" => Some("Red Dot"),
+    "SCOPE X2" | "X2" => Some("x2"),
+    "SCOPE X3" | "X3" => Some("x3"),
+    "SCOPE X4" | "X4" => Some("x4"),
+    "SCOPE X6" | "X6" => Some("x6"),
+    _ => None,
+  }
+}
+
+fn hotkey_token_to_shortcut(token: &str) -> Option<Shortcut> {
+  let normalized = token.trim().to_uppercase();
+  let candidate = if let Some(rest) = normalized.strip_prefix("KEY") {
+    if rest.len() == 1 && rest.chars().all(|ch| ch.is_ascii_alphabetic()) {
+      rest.to_string()
+    } else {
+      return None;
+    }
+  } else if let Some(rest) = normalized.strip_prefix("DIGIT") {
+    if rest.len() == 1 && rest.chars().all(|ch| ch.is_ascii_digit()) {
+      rest.to_string()
+    } else {
+      return None;
+    }
+  } else {
+    match normalized.as_str() {
+      "ARROWUP" => "Up".to_string(),
+      "ARROWDOWN" => "Down".to_string(),
+      "ARROWLEFT" => "Left".to_string(),
+      "ARROWRIGHT" => "Right".to_string(),
+      "SPACE" => "Space".to_string(),
+      "TAB" => "Tab".to_string(),
+      "ENTER" | "NUMENTER" => "Enter".to_string(),
+      "ESCAPE" => "Escape".to_string(),
+      "BACKSPACE" => "Backspace".to_string(),
+      "DELETE" => "Delete".to_string(),
+      "INSERT" => "Insert".to_string(),
+      "HOME" => "Home".to_string(),
+      "END" => "End".to_string(),
+      "PAGEUP" => "PageUp".to_string(),
+      "PAGEDOWN" => "PageDown".to_string(),
+      _ => normalized,
+    }
+  };
+
+  Shortcut::from_str(&candidate).ok()
+}
+
+fn register_global_hotkeys(
+  app: &tauri::AppHandle,
+  hotkeys: &HashMap<String, String>,
+) -> Result<(), String> {
+  let state = app.state::<GlobalHotkeyBindings>();
+  {
+    let mut previous = state
+      .registered_scope_shortcuts
+      .lock()
+      .map_err(|_| "global shortcut registry mutex poisoned".to_string())?;
+    for shortcut in previous.iter() {
+      let _ = app.global_shortcut().unregister(shortcut.clone());
+    }
+    previous.clear();
+  }
+
+  let mut shortcuts_to_scope = HashMap::new();
+  let mut registered_scope_shortcuts = Vec::new();
+  for (mode, token) in hotkeys {
+    let Some(scope) = mode_to_scope(mode) else {
+      continue;
+    };
+    let Some(shortcut) = hotkey_token_to_shortcut(token) else {
+      continue;
+    };
+
+    app
+      .global_shortcut()
+      .register(shortcut.clone())
+      .map_err(|error| format!("failed to register global shortcut {token}: {error}"))?;
+    registered_scope_shortcuts.push(shortcut.clone());
+    shortcuts_to_scope.insert(shortcut.to_string().to_uppercase(), scope.to_string());
+  }
+
+  let mut guard = state
+    .shortcuts_to_scope
+    .lock()
+    .map_err(|_| "global shortcut state mutex poisoned".to_string())?;
+  *guard = shortcuts_to_scope;
+  let mut previous = state
+    .registered_scope_shortcuts
+    .lock()
+    .map_err(|_| "global shortcut registry mutex poisoned".to_string())?;
+  *previous = registered_scope_shortcuts;
+  Ok(())
+}
 
 #[derive(Serialize, Deserialize)]
 struct EncryptedSettingsFile {
@@ -153,10 +274,12 @@ fn recoil_update_settings(
 
 #[tauri::command]
 fn recoil_update_hotkeys(
+  app: tauri::AppHandle,
   engine: tauri::State<'_, RecoilEngine>,
   hotkeys: HashMap<String, String>,
 ) -> Result<(), String> {
-  engine.set_hotkeys(hotkeys)
+  engine.set_hotkeys(hotkeys.clone())?;
+  register_global_hotkeys(&app, &hotkeys)
 }
 
 #[tauri::command]
@@ -164,10 +287,68 @@ fn recoil_status(engine: tauri::State<'_, RecoilEngine>) -> Result<EngineStatus,
   engine.status()
 }
 
+#[tauri::command]
+fn set_streamer_mode(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+  let Some(window) = app.get_webview_window("main") else {
+    return Err("main window not found".to_string());
+  };
+  window
+    .set_content_protected(enabled)
+    .map_err(|error| format!("failed to update streamer mode: {error}"))?;
+  window
+    .set_skip_taskbar(enabled)
+    .map_err(|error| format!("failed to update taskbar visibility: {error}"))?;
+
+  let ui_state = app.state::<AppUiState>();
+  if let Ok(guard) = ui_state.tray_icon.lock() {
+    if let Some(tray_icon) = guard.as_ref() {
+      let _ = tray_icon.set_visible(!enabled);
+    }
+  }
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let recoil_engine = RecoilEngine::default();
   tauri::Builder::default()
+    .plugin(
+      tauri_plugin_global_shortcut::Builder::new()
+        .with_handler(|app, shortcut, event| {
+          if event.state != ShortcutState::Pressed {
+            return;
+          }
+          if shortcut.to_string().eq_ignore_ascii_case(EMERGENCY_RESTORE_SHORTCUT) {
+            let ui_state = app.state::<AppUiState>();
+            if let Some(window) = app.get_webview_window("main") {
+              let _ = window.set_skip_taskbar(false);
+              let _ = window.show();
+              let _ = window.set_focus();
+            }
+            if let Ok(guard) = ui_state.tray_icon.lock() {
+              if let Some(tray_icon) = guard.as_ref() {
+                let _ = tray_icon.set_visible(true);
+              }
+            }
+            return;
+          }
+          let state = app.state::<GlobalHotkeyBindings>();
+          let scope = {
+            let Ok(guard) = state.shortcuts_to_scope.lock() else {
+              return;
+            };
+            guard.get(&shortcut.to_string().to_uppercase()).cloned()
+          };
+          let Some(scope) = scope else {
+            return;
+          };
+          let engine = app.state::<RecoilEngine>();
+          let _ = engine.set_scope(&scope);
+        })
+        .build(),
+    )
+    .manage(GlobalHotkeyBindings::default())
+    .manage(AppUiState::default())
     .manage(recoil_engine)
     .invoke_handler(tauri::generate_handler![
       save_secure_settings,
@@ -179,14 +360,17 @@ pub fn run() {
       recoil_set_scope,
       recoil_update_settings,
       recoil_update_hotkeys,
-      recoil_status
+      recoil_status,
+      set_streamer_mode
     ])
     .setup(|app| {
+      let trial_icon = load_trial_icon()?;
       let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
       let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
       let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-      TrayIconBuilder::new()
+      let tray_icon = TrayIconBuilder::new()
+        .icon(trial_icon.clone())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
@@ -215,9 +399,24 @@ pub fn run() {
           _ => {}
         })
         .build(app)?;
+      if let Ok(mut guard) = app.state::<AppUiState>().tray_icon.lock() {
+        *guard = Some(tray_icon);
+      }
 
       if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_icon(trial_icon.clone());
         let _ = window.set_theme(Some(tauri::Theme::Dark));
+      }
+      let default_hotkeys = HashMap::from([
+        ("Reddot".to_string(), "F1".to_string()),
+        ("SCOPE X2".to_string(), "F2".to_string()),
+        ("SCOPE X3".to_string(), "F3".to_string()),
+        ("SCOPE X4".to_string(), "F4".to_string()),
+        ("SCOPE X6".to_string(), "F5".to_string()),
+      ]);
+      register_global_hotkeys(app.handle(), &default_hotkeys)?;
+      if let Ok(shortcut) = Shortcut::from_str(EMERGENCY_RESTORE_SHORTCUT) {
+        let _ = app.global_shortcut().register(shortcut);
       }
 
       if cfg!(debug_assertions) {

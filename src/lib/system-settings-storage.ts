@@ -4,12 +4,16 @@ import { invoke } from "@tauri-apps/api/core";
 
 const LEGACY_STORAGE_KEY = "pubg-desktop-system-settings-v1";
 
+export type BackgroundEffectStyle = "network" | "evil-eye" | "particles";
+
 export type PersistedSystemSettings = {
   verticalStrength?: number[];
   horizontalStrength?: number[];
   selectedMode?: string;
   uiAccentColor?: string;
+  backgroundEffect?: BackgroundEffectStyle;
   soundTone?: "guitar" | "piano" | "soft" | "metal";
+  streamerMode?: boolean;
   hotkeys?: Record<string, string>;
   userName?: string;
   savedConfigs?: Array<{

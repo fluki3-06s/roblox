@@ -2,6 +2,7 @@
 
 import { ChevronRight, FolderOpen, Minus, Settings, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 
 import { ScienceNetworkBackground } from "@/components/science-network-background";
@@ -20,7 +21,11 @@ import {
   updateRecoilSettings,
 } from "@/lib/recoil-engine";
 import { isSoundEnabled } from "@/lib/sound-settings";
-import { readSystemSettings, writeSystemSettings } from "@/lib/system-settings-storage";
+import {
+  type BackgroundEffectStyle,
+  readSystemSettings,
+  writeSystemSettings,
+} from "@/lib/system-settings-storage";
 import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 const modeItems = ["Reddot", "SCOPE X2", "SCOPE X3", "SCOPE X4", "SCOPE X6"];
@@ -39,6 +44,7 @@ const defaultHotkeys: Record<string, string> = {
   "SCOPE X4": "F4",
   "SCOPE X6": "F5",
 };
+const backgroundEffectOptions: BackgroundEffectStyle[] = ["network", "evil-eye", "particles"];
 
 const uiModeToRecoilScope: Record<string, "Red Dot" | "x2" | "x3" | "x4" | "x6"> = {
   Reddot: "Red Dot",
@@ -458,7 +464,8 @@ export default function SystemPage() {
   const [isRecoilRunning, setIsRecoilRunning] = useState(false);
   const [runtimeScope, setRuntimeScope] = useState<"Red Dot" | "x2" | "x3" | "x4" | "x6">("Red Dot");
   const [accentColor, setAccentColor] = useState("#22D3EE");
-  const [soundTone, setSoundTone] = useState<SoundTone>("guitar");
+  const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffectStyle>("network");
+  const soundTone: SoundTone = "guitar";
   const [avatarUrl, setAvatarUrl] = useState(
     "https://api.dicebear.com/9.x/adventurer-neutral/svg?seed=user-12&backgroundType=gradientLinear"
   );
@@ -756,16 +763,11 @@ export default function SystemPage() {
         if (typeof parsed.uiAccentColor === "string" && isValidHexColor(parsed.uiAccentColor)) {
           setAccentColor(parsed.uiAccentColor.toUpperCase());
         }
-
         if (
-          parsed.soundTone === "guitar" ||
-          parsed.soundTone === "piano" ||
-          parsed.soundTone === "soft"
+          typeof parsed.backgroundEffect === "string" &&
+          backgroundEffectOptions.includes(parsed.backgroundEffect as BackgroundEffectStyle)
         ) {
-          setSoundTone(parsed.soundTone);
-        } else if (parsed.soundTone === "metal") {
-          // Backward compatibility: old "metal" maps to new "piano".
-          setSoundTone("piano");
+          setBackgroundEffect(parsed.backgroundEffect as BackgroundEffectStyle);
         }
 
         if (parsed.hotkeys && typeof parsed.hotkeys === "object") {
@@ -805,20 +807,31 @@ export default function SystemPage() {
       horizontalStrength,
       selectedMode,
       uiAccentColor: accentColor,
-      soundTone,
+      backgroundEffect,
       hotkeys,
       userName,
       savedConfigs,
     };
 
-    void writeSystemSettings(payload);
+    let cancelled = false;
+    void (async () => {
+      const existing = (await readSystemSettings()) ?? {};
+      if (cancelled) return;
+      await writeSystemSettings({
+        ...existing,
+        ...payload,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [
     hasHydratedSettings,
     verticalStrength,
     horizontalStrength,
     selectedMode,
     accentColor,
-    soundTone,
+    backgroundEffect,
     hotkeys,
     userName,
     savedConfigs,
@@ -1138,8 +1151,8 @@ export default function SystemPage() {
       }`}
     >
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_8%,rgba(255,255,255,0.035),transparent_38%),radial-gradient(circle_at_80%_12%,rgba(255,255,255,0.018),transparent_34%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-      <div className="soft-glow-move pointer-events-none absolute -left-12 top-10 h-40 w-40 rounded-full bg-white/[0.01] blur-3xl" />
-      <div className="soft-glow-move pointer-events-none absolute -right-10 bottom-12 h-44 w-44 rounded-full bg-white/[0.005] blur-3xl [animation-delay:1.2s]" />
+      <div className="soft-glow-move pointer-events-none absolute -left-12 top-10 h-40 w-40 rounded-full bg-white/[0.09] blur-3xl" />
+      <div className="soft-glow-move pointer-events-none absolute -right-10 bottom-12 h-44 w-44 rounded-full bg-white/[0.06] blur-3xl [animation-delay:1.2s]" />
 
       <main
         className={`panel-enter relative grid h-screen grid-cols-[0.9fr_2.35fr_1.15fr] overflow-hidden rounded-none border border-white/10 bg-gradient-to-b from-white/10 via-zinc-950/58 to-black/68 shadow-[0_22px_90px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-2xl transition-opacity duration-400 ${
@@ -1147,9 +1160,13 @@ export default function SystemPage() {
         }`}
       >
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.03),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.016),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-        <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
-        <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
-        <ScienceNetworkBackground className="z-[6] opacity-55" />
+        <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.09] blur-3xl" />
+        <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.06] blur-3xl" />
+        <ScienceNetworkBackground
+          className="z-[6] opacity-55"
+          accentColor={accentColor}
+          variant={backgroundEffect}
+        />
 
         <div
           data-tauri-drag-region
@@ -1177,7 +1194,10 @@ export default function SystemPage() {
         </div>
 
         <section className="panel-fade-up relative z-10 overflow-hidden border-r border-white/8 p-5">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">
+          <h2
+            className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400"
+            style={{ color: `${accentColor}CC` }}
+          >
             Mode
           </h2>
           <ul className="mt-4 space-y-0.5">
@@ -1205,7 +1225,10 @@ export default function SystemPage() {
                     style={selectedMode === item ? { backgroundColor: accentColor } : undefined}
                   />
                   <div className="flex items-center text-left">
-                    <p className="text-[13px] font-semibold tracking-wide text-zinc-100 whitespace-nowrap">
+                    <p
+                      className="text-[13px] font-semibold tracking-wide text-zinc-100 whitespace-nowrap"
+                      style={selectedMode === item ? { color: accentColor } : undefined}
+                    >
                       {item}
                     </p>
                   </div>
@@ -1362,7 +1385,13 @@ export default function SystemPage() {
                 min={0}
                 max={3}
                 step={0.01}
-                className="w-full [&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:bg-linear-to-r [&_[data-slot=slider-track]]:from-white/20 [&_[data-slot=slider-track]]:via-white/35 [&_[data-slot=slider-track]]:to-white/20 [&_[data-slot=slider-range]]:bg-linear-to-r [&_[data-slot=slider-range]]:from-white [&_[data-slot=slider-range]]:via-zinc-200 [&_[data-slot=slider-range]]:to-zinc-500 [&_[data-slot=slider-thumb]]:size-3.5 [&_[data-slot=slider-thumb]]:border-white/90 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-thumb]]:shadow-none"
+                style={
+                  {
+                    "--slider-accent": accentColor,
+                    "--slider-track-gradient": `radial-gradient(ellipse at center, ${accentColor}A6 0%, ${accentColor}78 18%, ${accentColor}42 42%, rgba(50,50,62,0.8) 70%, rgba(32,32,40,0.9) 100%)`,
+                  } as CSSProperties
+                }
+                className="w-full [&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:rounded-full [&_[data-slot=slider-track]]:bg-[image:var(--slider-track-gradient)] [&_[data-slot=slider-range]]:rounded-full [&_[data-slot=slider-range]]:bg-[var(--slider-accent)] [&_[data-slot=slider-thumb]]:size-3.5 [&_[data-slot=slider-thumb]]:border-white/90 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-thumb]]:shadow-none"
               />
             </div>
 
@@ -1427,7 +1456,13 @@ export default function SystemPage() {
                 min={6}
                 max={16}
                 step={0.1}
-                className="w-full [&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:bg-linear-to-r [&_[data-slot=slider-track]]:from-white/20 [&_[data-slot=slider-track]]:via-white/35 [&_[data-slot=slider-track]]:to-white/20 [&_[data-slot=slider-range]]:bg-linear-to-r [&_[data-slot=slider-range]]:from-white [&_[data-slot=slider-range]]:via-zinc-200 [&_[data-slot=slider-range]]:to-zinc-500 [&_[data-slot=slider-thumb]]:size-3.5 [&_[data-slot=slider-thumb]]:border-white/90 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-thumb]]:shadow-none"
+                style={
+                  {
+                    "--slider-accent": accentColor,
+                    "--slider-track-gradient": `radial-gradient(ellipse at center, ${accentColor}A6 0%, ${accentColor}78 18%, ${accentColor}42 42%, rgba(50,50,62,0.8) 70%, rgba(32,32,40,0.9) 100%)`,
+                  } as CSSProperties
+                }
+                className="w-full [&_[data-slot=slider-track]]:h-1.5 [&_[data-slot=slider-track]]:rounded-full [&_[data-slot=slider-track]]:bg-[image:var(--slider-track-gradient)] [&_[data-slot=slider-range]]:rounded-full [&_[data-slot=slider-range]]:bg-[var(--slider-accent)] [&_[data-slot=slider-thumb]]:size-3.5 [&_[data-slot=slider-thumb]]:border-white/90 [&_[data-slot=slider-thumb]]:bg-white [&_[data-slot=slider-thumb]]:shadow-none"
               />
             </div>
           </div>
@@ -1451,7 +1486,12 @@ export default function SystemPage() {
             </Button>
             <Button
               onClick={() => setIsLoadModalOpen(true)}
-              className="h-10 min-w-22 rounded-md border-0 bg-gradient-to-b from-zinc-100 to-zinc-300 px-6 text-sm font-semibold text-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85)] transition duration-200 hover:from-white hover:to-zinc-200 active:scale-[0.98]"
+              className="h-10 min-w-22 rounded-md border bg-transparent px-6 text-sm font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_6px_20px_rgba(0,0,0,0.4)] backdrop-blur-md transition duration-200 active:scale-[0.98]"
+              style={{
+                borderColor: `${accentColor}88`,
+                color: accentColor,
+                boxShadow: `inset 0 1px 0 rgba(255,255,255,0.12), 0 6px 20px rgba(0,0,0,0.4), 0 0 0 1px ${accentColor}1f`,
+              }}
             >
               LOAD
             </Button>
@@ -1463,7 +1503,10 @@ export default function SystemPage() {
           className="panel-fade-up relative z-10 min-w-0 overflow-hidden p-5 [animation-delay:140ms]"
         >
           <div className="border-b border-white/10 pb-2">
-            <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400">
+            <h2
+              className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-400"
+              style={{ color: `${accentColor}CC` }}
+            >
               Hotkey
             </h2>
           </div>
@@ -1486,7 +1529,10 @@ export default function SystemPage() {
                 >
                   <div className="flex min-w-0 items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="whitespace-nowrap text-[12px] font-semibold tracking-wide text-zinc-100">
+                      <p
+                        className="whitespace-nowrap text-[12px] font-semibold tracking-wide text-zinc-100"
+                        style={bindingTarget === item ? { color: accentColor } : undefined}
+                      >
                         {item}
                       </p>
                     </div>
@@ -1586,8 +1632,8 @@ export default function SystemPage() {
             className="animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-200 relative w-full max-w-2xl overflow-hidden border border-white/10 bg-gradient-to-b from-white/8 via-zinc-950/55 to-black/65 shadow-[0_22px_90px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl"
           >
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.028),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.014),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-            <div className="pointer-events-none absolute -left-12 top-4 h-28 w-28 rounded-full bg-white/[0.01] blur-3xl" />
-            <div className="pointer-events-none absolute -right-10 bottom-4 h-32 w-32 rounded-full bg-white/[0.005] blur-3xl" />
+            <div className="pointer-events-none absolute -left-12 top-4 h-28 w-28 rounded-full bg-white/[0.09] blur-3xl" />
+            <div className="pointer-events-none absolute -right-10 bottom-4 h-32 w-32 rounded-full bg-white/[0.06] blur-3xl" />
 
             <div className="relative z-10 flex items-center justify-between border-b border-white/10 px-3.5 py-2.5">
               <div>
@@ -1731,8 +1777,8 @@ export default function SystemPage() {
       >
         <div className="relative h-full w-full overflow-hidden rounded-none border border-white/10 bg-gradient-to-b from-white/8 via-zinc-950/55 to-black/65 p-6 text-zinc-100 shadow-[0_22px_90px_rgba(0,0,0,0.72),inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.03),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.016),transparent_36%),linear-gradient(140deg,#060607_0%,#0a0b0e_48%,#050507_100%)]" />
-          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
-          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
+          <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.09] blur-3xl" />
+          <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.06] blur-3xl" />
 
           <div className="relative z-10 mx-auto flex h-full w-full max-w-sm items-center">
             <div className="w-full text-left">

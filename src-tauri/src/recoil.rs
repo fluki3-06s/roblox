@@ -236,6 +236,29 @@ fn apply_hotkey_map(state: &mut EngineState, hotkeys: HashMap<String, String>) {
 
 fn parse_hotkey_to_vk(token: &str) -> Option<i32> {
     let normalized = token.trim().to_uppercase();
+    if let Some(rest) = normalized.strip_prefix("KEY") {
+        if rest.len() == 1 {
+            let ch = rest.chars().next()?;
+            if ch.is_ascii_alphabetic() {
+                return Some(ch as i32);
+            }
+        }
+    }
+    if let Some(rest) = normalized.strip_prefix("DIGIT") {
+        if rest.len() == 1 {
+            let ch = rest.chars().next()?;
+            if ch.is_ascii_digit() {
+                return Some(ch as i32);
+            }
+        }
+    }
+    if let Some(rest) = normalized.strip_prefix("NUMPAD") {
+        if let Ok(number) = rest.parse::<i32>() {
+            if (0..=9).contains(&number) {
+                return Some(0x60 + number); // Num0..Num9
+            }
+        }
+    }
     if let Some(rest) = normalized.strip_prefix('F') {
         if let Ok(number) = rest.parse::<i32>() {
             if (1..=24).contains(&number) {
@@ -254,6 +277,31 @@ fn parse_hotkey_to_vk(token: &str) -> Option<i32> {
         "ARROWDOWN" => Some(0x28),
         "ARROWLEFT" => Some(0x25),
         "ARROWRIGHT" => Some(0x27),
+        "SHIFT" => Some(0x10),
+        "CTRL" | "CONTROL" => Some(0x11),
+        "ALT" => Some(0x12),
+        "META" | "WIN" | "WINDOWS" => Some(0x5B),
+        "BACKSPACE" => Some(0x08),
+        "CAPSLOCK" => Some(0x14),
+        "PRINTSCREEN" => Some(0x2C),
+        "SCROLLLOCK" => Some(0x91),
+        "PAUSE" => Some(0x13),
+        "NUM0" => Some(0x60),
+        "NUM1" => Some(0x61),
+        "NUM2" => Some(0x62),
+        "NUM3" => Some(0x63),
+        "NUM4" => Some(0x64),
+        "NUM5" => Some(0x65),
+        "NUM6" => Some(0x66),
+        "NUM7" => Some(0x67),
+        "NUM8" => Some(0x68),
+        "NUM9" => Some(0x69),
+        "NUM+" => Some(0x6B),
+        "NUM-" => Some(0x6D),
+        "NUM*" => Some(0x6A),
+        "NUM/" => Some(0x6F),
+        "NUM." => Some(0x6E),
+        "NUMENTER" => Some(0x0D),
         "MOUSE4" => Some(VK_XBUTTON1),
         "MOUSE5" => Some(VK_XBUTTON2),
         "SPACE" => Some(0x20),

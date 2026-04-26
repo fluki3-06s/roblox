@@ -5,7 +5,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { SoundToggleButton } from "@/components/sound-toggle-button";
-import { readSystemSettings, writeSystemSettings } from "@/lib/system-settings-storage";
+import {
+  type BackgroundEffectStyle,
+  readSystemSettings,
+  writeSystemSettings,
+} from "@/lib/system-settings-storage";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 const accentPresets = [
@@ -20,13 +25,11 @@ const accentPresets = [
   "#FFFFFF",
 ];
 
-const soundToneOptions = [
-  { value: "guitar", label: "Guitar", hint: "Bright pluck, clear response" },
-  { value: "piano", label: "Piano", hint: "Natural piano key tone" },
-  { value: "soft", label: "Soft", hint: "Lower impact, smoother tone" },
-] as const;
-
-type SoundTone = (typeof soundToneOptions)[number]["value"];
+const backgroundEffectOptions: Array<{ value: BackgroundEffectStyle; label: string; hint: string }> = [
+  { value: "network", label: "Network", hint: "Connected geometric lines" },
+  { value: "evil-eye", label: "Evil Eye", hint: "Animated burning eye effect" },
+  { value: "particles", label: "Particles", hint: "Floating ambient particles" },
+];
 
 function isValidHexColor(value: string) {
   return /^#[0-9A-Fa-f]{6}$/.test(value.trim());
@@ -77,7 +80,8 @@ async function handleWindowAction(action: "minimize" | "close") {
 export default function SettingsPage() {
   const router = useRouter();
   const [accentColor, setAccentColor] = useState("#22D3EE");
-  const [soundTone, setSoundTone] = useState<SoundTone>("guitar");
+  const [backgroundEffect, setBackgroundEffect] = useState<BackgroundEffectStyle>("network");
+  const [streamerMode, setStreamerMode] = useState(false);
   const [hue, setHue] = useState(190);
   const [isPickingHue, setIsPickingHue] = useState(false);
   const [isHueHovered, setIsHueHovered] = useState(false);
@@ -104,17 +108,24 @@ export default function SettingsPage() {
   useEffect(() => {
     async function hydrateAccent() {
       const parsed = await readSystemSettings();
-      const savedTone = parsed?.soundTone;
-      if (savedTone === "guitar" || savedTone === "piano" || savedTone === "soft") {
-        setSoundTone(savedTone);
-      } else if (savedTone === "metal") {
-        // Backward compatibility: old "metal" maps to new "piano".
-        setSoundTone("piano");
-      }
       const saved = parsed?.uiAccentColor;
       if (typeof saved === "string" && isValidHexColor(saved)) {
         const normalized = saved.toUpperCase();
         setAccentColor(normalized);
+      }
+      if (
+        parsed?.backgroundEffect === "network" ||
+        parsed?.backgroundEffect === "evil-eye" ||
+        parsed?.backgroundEffect === "particles"
+      ) {
+        setBackgroundEffect(parsed.backgroundEffect);
+      }
+      const savedStreamerMode = parsed?.streamerMode === true;
+      setStreamerMode(savedStreamerMode);
+      try {
+        await invoke("set_streamer_mode", { enabled: savedStreamerMode });
+      } catch {
+        // Ignore on non-Tauri environments.
       }
     }
     void hydrateAccent();
@@ -149,12 +160,26 @@ export default function SettingsPage() {
     });
   }
 
-  async function persistSoundTone(nextTone: SoundTone) {
-    setSoundTone(nextTone);
+  async function persistStreamerMode(nextEnabled: boolean) {
+    setStreamerMode(nextEnabled);
+    try {
+      await invoke("set_streamer_mode", { enabled: nextEnabled });
+    } catch {
+      // Ignore on non-Tauri environments.
+    }
     const existing = (await readSystemSettings()) ?? {};
     await writeSystemSettings({
       ...existing,
-      soundTone: nextTone,
+      streamerMode: nextEnabled,
+    });
+  }
+
+  async function persistBackgroundEffect(nextEffect: BackgroundEffectStyle) {
+    setBackgroundEffect(nextEffect);
+    const existing = (await readSystemSettings()) ?? {};
+    await writeSystemSettings({
+      ...existing,
+      backgroundEffect: nextEffect,
     });
   }
 
@@ -164,7 +189,10 @@ export default function SettingsPage() {
       <div className="pointer-events-none absolute -left-12 top-6 h-36 w-36 rounded-full bg-white/[0.01] blur-3xl" />
       <div className="pointer-events-none absolute -right-10 bottom-8 h-40 w-40 rounded-full bg-white/[0.005] blur-3xl" />
 
-      <main className="relative h-screen bg-gradient-to-b from-white/10 via-zinc-950/58 to-black/68 p-6">
+      <main
+        data-lenis-prevent
+        className="relative h-screen overflow-y-auto bg-gradient-to-b from-white/10 via-zinc-950/58 to-black/68 p-6 [scrollbar-width:thin] [scrollbar-color:rgba(161,161,170,0.45)_transparent] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-zinc-500/45 [&::-webkit-scrollbar-thumb:hover]:bg-zinc-400/55"
+      >
         <div data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-10" />
 
         <div className="absolute right-3 top-3 z-30 flex items-center gap-0.5">
@@ -187,7 +215,7 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <div className="mx-auto mt-8 max-w-3xl">
+        <div className="mx-auto mt-5 max-w-3xl pb-8">
           <button
             type="button"
             onClick={() => router.push("/system")}
@@ -213,28 +241,54 @@ export default function SettingsPage() {
               </div>
 
               <div className="bg-transparent px-2 py-1">
-                <p className="text-sm font-semibold text-zinc-200">Sound Tone</p>
-                <p className="text-xs text-zinc-500">Pick the tone profile for interaction sounds.</p>
+                <p className="text-sm font-semibold text-zinc-200">Background Effect</p>
+                <p className="text-xs text-zinc-500">Switch the animated geometry style in System screen.</p>
                 <div className="mt-2 grid grid-cols-3 gap-2">
-                  {soundToneOptions.map((tone) => {
-                    const isActive = soundTone === tone.value;
+                  {backgroundEffectOptions.map((effect) => {
+                    const isActive = backgroundEffect === effect.value;
                     return (
                       <button
-                        key={tone.value}
+                        key={effect.value}
                         type="button"
-                        onClick={() => void persistSoundTone(tone.value)}
+                        onClick={() => void persistBackgroundEffect(effect.value)}
                         className={`rounded-none border px-2 py-2 text-left transition ${
                           isActive
                             ? "border-white/70 bg-white/10 text-white"
                             : "border-white/12 bg-transparent text-zinc-300 hover:border-white/30 hover:text-white"
                         }`}
                       >
-                        <p className="text-xs font-semibold">{tone.label}</p>
-                        <p className="mt-0.5 text-[10px] text-zinc-500">{tone.hint}</p>
+                        <p className="text-xs font-semibold">{effect.label}</p>
+                        <p className="mt-0.5 text-[10px] text-zinc-500">{effect.hint}</p>
                       </button>
                     );
                   })}
                 </div>
+              </div>
+
+              <div className="flex items-center justify-between bg-transparent px-2 py-1">
+                <div>
+                  <p className="text-sm font-semibold text-zinc-200">Streamer Mode</p>
+                  <p className="text-xs text-zinc-500">Hide app window from screen capture tools.</p>
+                  <p className="mt-1 text-[10px] text-amber-300/90">
+                    Warning: If app is hidden, press Ctrl+Shift+F10 to show it again.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void persistStreamerMode(!streamerMode)}
+                  aria-pressed={streamerMode}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full border transition ${
+                    streamerMode
+                      ? "border-white/50 bg-white/20"
+                      : "border-white/20 bg-black/30"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                      streamerMode ? "translate-x-5" : "translate-x-1"
+                    }`}
+                  />
+                </button>
               </div>
 
               <div className="bg-transparent px-2 py-1">

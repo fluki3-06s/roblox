@@ -16,7 +16,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SoundToggleButton } from "@/components/sound-toggle-button";
 import { isSoundEnabled } from "@/lib/sound-settings";
-import { readSystemSettings } from "@/lib/system-settings-storage";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
@@ -168,31 +167,26 @@ function playSoftTone(context: AudioContext, freq: number, duration: number, off
   osc.stop(t0 + duration + 0.01);
 }
 
+function resolveBgmSource() {
+  const tauriMusicPath = "D:/PUBG/desktop-ui/src/music.mp3";
+  if (typeof convertFileSrc === "function") {
+    try {
+      return convertFileSrc(tauriMusicPath);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export default function Home() {
   const router = useRouter();
-  const [soundTone, setSoundTone] = useState<SoundTone>("guitar");
+  const soundTone: SoundTone = "guitar";
   const [isWindowReady, setIsWindowReady] = useState(false);
   const [isBooting, setIsBooting] = useState(true);
   const [showLogin, setShowLogin] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    async function hydrateSoundTone() {
-      const parsed = await readSystemSettings();
-      if (
-        parsed?.soundTone === "guitar" ||
-        parsed?.soundTone === "piano" ||
-        parsed?.soundTone === "soft"
-      ) {
-        setSoundTone(parsed.soundTone);
-      } else if (parsed?.soundTone === "metal") {
-        // Backward compatibility: old "metal" maps to new "piano".
-        setSoundTone("piano");
-      }
-    }
-    void hydrateSoundTone();
-  }, []);
 
   useEffect(() => {
     async function setupLoginWindow() {
@@ -224,7 +218,8 @@ export default function Home() {
   useEffect(() => {
     if (!showLogin || isNavigating) return;
 
-    const source = convertFileSrc("D:/PUBG/desktop-ui/src/music.mp3");
+    const source = resolveBgmSource();
+    if (!source) return;
     const audio = new Audio(source);
     audio.loop = true;
     audio.volume = 0.18;

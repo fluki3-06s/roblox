@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import type { BackgroundEffectStyle } from "@/lib/system-settings-storage";
+import { EvilEye } from "@/components/evil-eye";
+import { ParticlesBg } from "@/components/particles-bg";
 
 type NetworkNode = {
   x: number;
@@ -11,12 +14,31 @@ type NetworkNode = {
 
 type ScienceNetworkBackgroundProps = {
   className?: string;
+  accentColor?: string;
+  variant?: BackgroundEffectStyle;
 };
 
-export function ScienceNetworkBackground({ className }: ScienceNetworkBackgroundProps) {
+function hexToRgb(color: string) {
+  const match = color.trim().match(/^#([0-9a-fA-F]{6})$/);
+  if (!match) return null;
+  const hex = match[1];
+  return {
+    r: parseInt(hex.slice(0, 2), 16),
+    g: parseInt(hex.slice(2, 4), 16),
+    b: parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+export function ScienceNetworkBackground({
+  className,
+  accentColor = "#22D3EE",
+  variant = "network",
+}: ScienceNetworkBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const particlePalette = useMemo(() => [accentColor, "#ffffff", accentColor], [accentColor]);
 
   useEffect(() => {
+    if (variant !== "network") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -24,6 +46,7 @@ export function ScienceNetworkBackground({ className }: ScienceNetworkBackground
     if (!ctx) return;
     const canvasEl = canvas;
     const ctx2d = ctx;
+    const rgb = hexToRgb(accentColor) ?? { r: 34, g: 211, b: 238 };
 
     let width = 0;
     let height = 0;
@@ -54,7 +77,7 @@ export function ScienceNetworkBackground({ className }: ScienceNetworkBackground
       buildNodes();
     }
 
-    function drawFrame() {
+    function drawNetworkFrame() {
       ctx2d.clearRect(0, 0, width, height);
       const edgePadding = 6;
 
@@ -93,9 +116,9 @@ export function ScienceNetworkBackground({ className }: ScienceNetworkBackground
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist > maxDist) continue;
 
-          const alpha = (1 - dist / maxDist) * 0.14;
-          ctx2d.strokeStyle = `rgba(255,255,255,${alpha})`;
-          ctx2d.lineWidth = 1;
+          const alpha = (1 - dist / maxDist) * 0.24;
+          ctx2d.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha})`;
+          ctx2d.lineWidth = 1.15;
           ctx2d.beginPath();
           ctx2d.moveTo(a.x, a.y);
           ctx2d.lineTo(b.x, b.y);
@@ -111,6 +134,10 @@ export function ScienceNetworkBackground({ className }: ScienceNetworkBackground
       }
 
       animationId = window.requestAnimationFrame(drawFrame);
+    }
+
+    function drawFrame() {
+      drawNetworkFrame();
     }
 
     function onMouseMove(event: MouseEvent) {
@@ -136,13 +163,48 @@ export function ScienceNetworkBackground({ className }: ScienceNetworkBackground
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseleave", onMouseLeave);
     };
-  }, []);
+  }, [accentColor, variant]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className={`pointer-events-none absolute inset-0 opacity-75 ${className ?? ""}`}
-      aria-hidden="true"
-    />
+    <>
+      {variant === "evil-eye" ? (
+        <EvilEye
+          className={`pointer-events-none absolute inset-0 opacity-75 ${className ?? ""}`}
+          eyeColor={accentColor}
+          intensity={0.42}
+          pupilSize={0.5}
+          irisWidth={0.24}
+          glowIntensity={0.2}
+          scale={0.28}
+          noiseScale={1.0}
+          pupilFollow={0.5}
+          flameSpeed={0.9}
+          eyeOffsetY={-0.08}
+          interactive
+          backgroundColor="#000000"
+        />
+      ) : variant === "particles" ? (
+        <ParticlesBg
+          className={`pointer-events-none absolute inset-0 opacity-75 ${className ?? ""}`}
+          particleColors={particlePalette}
+          particleCount={220}
+          particleSpread={10}
+          speed={0.1}
+          particleBaseSize={90}
+          moveParticlesOnHover={false}
+          alphaParticles
+          disableRotation={false}
+          sizeRandomness={0.9}
+          cameraDistance={20}
+          pixelRatio={1}
+        />
+      ) : (
+        <canvas
+          ref={canvasRef}
+          className={`pointer-events-none absolute inset-0 opacity-75 ${className ?? ""}`}
+          aria-hidden="true"
+        />
+      )}
+    </>
   );
 }
