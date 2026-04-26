@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
     const { data, error } = await supabase
       .from('store_products')
-      .select('code,name,category,duration_days,price_points,is_active,sort_order')
+      .select('code,name,category,duration_days,price_points,discount_percent,image_url,is_active,sort_order')
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
 

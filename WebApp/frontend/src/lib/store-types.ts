@@ -4,6 +4,8 @@ export type StoreProduct = {
   category: 'KEY' | 'RESETHWID';
   duration_days: number | null;
   price_points: number;
+  discount_percent: number;
+  image_url: string | null;
   is_active: boolean;
   sort_order: number;
 };

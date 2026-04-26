@@ -95,7 +95,6 @@ export default function ShowcaseClient() {
                     loop
                     autoPlay
                     className="w-full h-full object-cover"
-                    poster="/images/phantomforce.jpg"
                   />
                   <div
                     className="absolute inset-0 pointer-events-none"

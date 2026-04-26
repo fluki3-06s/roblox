@@ -16,6 +16,24 @@ function formatRemaining(expiresAt: string | null, nowTs: number) {
   return `${d}d ${h}h ${m}m`;
 }
 
+const PRODUCT_LABEL_BY_CODE: Record<string, string> = {
+  key_1d: 'Key 1Day',
+  key_3d: 'Key 3Day',
+  key_7d: 'Key 7Day',
+  key_14d: 'Key 14Day',
+  key_30d: 'Key 30Day',
+  key_lifetime: 'Key Lifetime',
+  reset_hwid: 'ResetHWID',
+};
+
+function formatPlanLabel(productCode: string) {
+  const known = PRODUCT_LABEL_BY_CODE[productCode];
+  if (known) return known;
+  return productCode
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 export default function LicenseHistoryClient() {
   const [nowTs, setNowTs] = useState(Date.now());
   const [resetCredits, setResetCredits] = useState(0);
@@ -174,7 +192,7 @@ export default function LicenseHistoryClient() {
                           </div>
                         </td>
                         <td className="px-5 py-3 text-[var(--muted)]">{row.bound_device_hash ? row.bound_device_hash.slice(0, 12) : '-'}</td>
-                        <td className="px-5 py-3">{row.product_code}</td>
+                        <td className="px-5 py-3">{formatPlanLabel(row.product_code)}</td>
                         <td className="px-5 py-3">
                           <span className={`px-2 py-1 rounded text-xs ${row.status === 'active' ? 'bg-red-600/20 text-red-300' : 'bg-slate-500/20 text-slate-300'}`}>
                             {row.status.toUpperCase()}

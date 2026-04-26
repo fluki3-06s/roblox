@@ -23,7 +23,7 @@ export function MapSupport() {
   return (
     <div className="w-full">
       <div className="text-center mb-6 sm:mb-8">
-        <span className="text-[10px] sm:text-xs font-semibold tracking-[0.2em] text-white/90">SUPPORTED FPS GAMES</span>
+        <span className="text-[10px] sm:text-xs font-semibold tracking-[0.2em] text-white/90">SUPPORTED GAMES</span>
       </div>
       <div className="relative w-full max-w-6xl mx-auto aspect-[5/2] sm:aspect-[3/1] rounded-xl sm:rounded-2xl overflow-hidden glass-dark min-h-[140px] sm:min-h-[180px]">
         <AnimatePresence mode="wait">

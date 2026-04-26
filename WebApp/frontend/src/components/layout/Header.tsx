@@ -14,11 +14,11 @@ import {
   FileText,
   Menu,
   ChevronDown,
-  User,
   Wallet,
   History,
   Shield,
   Settings,
+  LogOut,
   LoaderCircle,
   X,
 } from 'lucide-react';
@@ -28,9 +28,9 @@ const formatNumber = (value: number) => new Intl.NumberFormat('en-US').format(va
 export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const isActive = useActiveLink();
-  const { profile, points, authReady, loginWithDiscord } = useAuth();
+  const { profile, points, authReady, loginWithDiscord, logout } = useAuth();
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -47,9 +47,10 @@ export function Header() {
   useEffect(() => {
     const checkAdmin = async () => {
       if (!profile) {
-        setIsAdmin(false);
+        setIsAdmin(null);
         return;
       }
+      setIsAdmin(null);
       try {
         const res = await fetch('/api/admin/me', { cache: 'no-store' });
         if (!res.ok) {
@@ -71,6 +72,12 @@ export function Header() {
     { href: '/store', label: 'Store', icon: ShoppingBag },
     { href: '/showcase', label: 'Showcase', icon: Eye },
     { href: '/terms', label: 'Terms', icon: FileText },
+  ];
+
+  const accountLinks = [
+    { href: '/my-topup', label: 'My Topup', icon: Wallet },
+    { href: '/topup-history', label: 'Topup History', icon: History },
+    { href: '/license-history', label: 'License History', icon: Shield },
   ];
 
   return (
@@ -134,7 +141,7 @@ export function Header() {
                 <button
                   type="button"
                   onClick={() => setProfileMenuOpen((prev) => !prev)}
-                  className="inline-flex items-center gap-2 text-white"
+                  className="inline-flex items-center gap-2 text-white outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0"
                 >
                   <div className="w-8 h-8 rounded-full overflow-hidden ring-1 ring-white/20 bg-white/10 flex items-center justify-center">
                     {profile.avatarUrl ? (
@@ -151,40 +158,96 @@ export function Header() {
                   </div>
                 </button>
 
-                {profileMenuOpen && (
-                  <div className="absolute right-0 top-11 w-56 rounded-lg overflow-hidden border border-white/10 bg-black/90 backdrop-blur-xl shadow-[0_18px_42px_-24px_rgba(0,0,0,0.95)]">
-                    <div className="px-3 py-2.5 border-b border-white/10 bg-white/[0.02]">
-                      <div className="flex items-center justify-between gap-2 text-white">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <User className="w-3.5 h-3.5 text-white/80 shrink-0" />
-                          <span className="font-semibold text-sm truncate">{profile.name}</span>
+                <AnimatePresence>
+                  {profileMenuOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.16, ease: 'easeOut' }}
+                      className="absolute right-0 top-12 z-[70] w-[260px] rounded-lg border border-white/10 bg-black/95 shadow-md backdrop-blur-sm"
+                    >
+                      <div className="px-3 py-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/55">
+                            My Account
+                        </p>
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex items-center gap-2">
+                            <div className="h-7 w-7 rounded-full overflow-hidden bg-white/10 flex items-center justify-center">
+                              {profile.avatarUrl ? (
+                                <img src={profile.avatarUrl} alt={profile.name} className="w-full h-full object-cover" />
+                              ) : (
+                                <span className="text-[10px] font-semibold text-white">
+                                  {profile.name.slice(0, 2).toUpperCase()}
+                                </span>
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-[13px] font-semibold text-white">{profile.name}</p>
+                              <p className="text-[11px] text-white/50">
+                                {isAdmin === null ? 'Checking role...' : isAdmin ? 'Admin' : 'Member'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-[10px] font-medium text-white/70 whitespace-nowrap">
+                            {formatNumber(points)} Point
+                          </div>
                         </div>
-                        <span className="text-[11px] text-red-300 whitespace-nowrap">{formatNumber(points)} Point</span>
                       </div>
-                    </div>
 
-                    <div className="px-2 py-2">
-                      <a href="/my-topup" className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-white/90 hover:bg-white/5 transition-colors">
-                        <Wallet className="w-3.5 h-3.5 text-white/70" />
-                        <span className="text-sm">My Topup</span>
-                      </a>
-                      <a href="/topup-history" className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-white/90 hover:bg-white/5 transition-colors">
-                        <History className="w-3.5 h-3.5 text-white/70" />
-                        <span className="text-sm">Topup History</span>
-                      </a>
-                      <a href="/license-history" className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-white/90 hover:bg-white/5 transition-colors">
-                        <Shield className="w-3.5 h-3.5 text-white/70" />
-                        <span className="text-sm">License History</span>
-                      </a>
+                      <div className="h-px bg-white/10" />
+
+                      <div className="px-1.5 py-1.5">
+                        {accountLinks.map((item) => {
+                          const Icon = item.icon;
+                          return (
+                            <Link
+                              key={item.href}
+                              href={item.href}
+                              onClick={() => setProfileMenuOpen(false)}
+                              className="group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-white/85 hover:bg-white/[0.07] transition-colors"
+                            >
+                              <Icon className="w-3.5 h-3.5 text-white/65" />
+                              <span className="text-[13px]">{item.label}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+
                       {isAdmin && (
-                        <a href="/admin/dashboard" className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-white/90 hover:bg-white/5 transition-colors">
-                          <Settings className="w-3.5 h-3.5 text-white/70" />
-                          <span className="text-sm">Admin Dashboard</span>
-                        </a>
+                        <>
+                          <div className="h-px bg-white/10" />
+                          <div className="px-1.5 py-1.5">
+                            <Link
+                              href="/admin/dashboard"
+                              onClick={() => setProfileMenuOpen(false)}
+                              className="group flex items-center gap-2.5 rounded-md px-2.5 py-2 text-white/85 hover:bg-white/[0.07] transition-colors"
+                            >
+                              <Settings className="w-3.5 h-3.5 text-white/65" />
+                              <span className="text-[13px]">Admin Dashboard</span>
+                            </Link>
+                          </div>
+                        </>
                       )}
-                    </div>
-                  </div>
-                )}
+
+                      <div className="h-px bg-white/10" />
+
+                      <div className="px-1.5 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProfileMenuOpen(false);
+                            void logout();
+                          }}
+                          className="group w-full flex items-center gap-2.5 rounded-md px-2.5 py-2 text-white/85 hover:bg-white/[0.07] transition-colors"
+                        >
+                          <LogOut className="w-3.5 h-3.5 text-white/65" />
+                          <span className="text-[13px]">Logout</span>
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             ) : (
               authReady ? (

@@ -11,7 +11,9 @@ interface Product {
   code: string;
   name: string;
   description: string;
-  price: number;
+  basePrice: number;
+  discountPercent: number;
+  finalPrice: number;
   image: string;
   category: string;
   badge?: string;
@@ -36,8 +38,10 @@ const PRODUCTS: Product[] = [
     code: 'key_lifetime',
     name: 'Key Lifetime',
     description: 'Lifetime license access with long-term profile support.',
-    price: 1499,
-    image: '/assets/store/lifetime.png',
+    basePrice: 1499,
+    discountPercent: 0,
+    finalPrice: 1499,
+    image: '/assets/images/products/Lifetime.png',
     category: 'KEY',
     badge: 'Most Popular',
   },
@@ -46,8 +50,10 @@ const PRODUCTS: Product[] = [
     code: 'key_30d',
     name: 'Key 30Day',
     description: '30-day license access with all active profile updates.',
-    price: 499,
-    image: '/assets/store/starter.png',
+    basePrice: 499,
+    discountPercent: 0,
+    finalPrice: 499,
+    image: '/assets/images/products/30day.png',
     category: 'KEY',
     badge: 'Popular',
   },
@@ -56,8 +62,10 @@ const PRODUCTS: Product[] = [
     code: 'key_1d',
     name: 'Key 1Day',
     description: '1-day license access for core recoil profiles.',
-    price: 39,
-    image: '/assets/store/lifetime.png',
+    basePrice: 39,
+    discountPercent: 0,
+    finalPrice: 39,
+    image: '/assets/images/products/1day.png',
     category: 'KEY',
   },
   {
@@ -65,8 +73,10 @@ const PRODUCTS: Product[] = [
     code: 'key_3d',
     name: 'Key 3Day',
     description: '3-day license access for recoil profile usage.',
-    price: 99,
-    image: '/assets/store/monthly.png',
+    basePrice: 99,
+    discountPercent: 0,
+    finalPrice: 99,
+    image: '/assets/images/products/3day.png',
     category: 'KEY',
   },
   {
@@ -74,8 +84,10 @@ const PRODUCTS: Product[] = [
     code: 'key_7d',
     name: 'Key 7Day',
     description: '7-day license access with full recoil profile features.',
-    price: 199,
-    image: '/assets/store/weekly.png',
+    basePrice: 199,
+    discountPercent: 0,
+    finalPrice: 199,
+    image: '/assets/images/products/7day.png',
     category: 'KEY',
   },
   {
@@ -83,8 +95,10 @@ const PRODUCTS: Product[] = [
     code: 'key_14d',
     name: 'Key 14Day',
     description: '14-day license access for extended gameplay sessions.',
-    price: 299,
-    image: '/assets/store/vip.png',
+    basePrice: 299,
+    discountPercent: 0,
+    finalPrice: 299,
+    image: '/assets/images/products/14.png',
     category: 'KEY',
   },
   {
@@ -92,9 +106,12 @@ const PRODUCTS: Product[] = [
     code: 'reset_hwid',
     name: 'ResetHWID',
     description: 'Reset hardware binding for your current license key.',
-    price: 149,
-    image: '/assets/store/custom.png',
+    basePrice: 149,
+    discountPercent: 0,
+    finalPrice: 149,
+    image: '/assets/images/products/reset.png',
     category: 'RESETHWID',
+    badge: 'Popular',
   },
 ];
 
@@ -105,13 +122,45 @@ const badgePriority: Record<string, number> = {
   Popular: 1,
 };
 
+const featuredOrderByCode: Record<string, number> = {
+  key_lifetime: 0,
+  reset_hwid: 1,
+  key_30d: 2,
+};
+
 function sortByBadgePriority(items: Product[]) {
   return [...items].sort((a, b) => {
+    const aFeatured = featuredOrderByCode[a.code];
+    const bFeatured = featuredOrderByCode[b.code];
+    if (aFeatured !== undefined || bFeatured !== undefined) {
+      if (aFeatured === undefined) return 1;
+      if (bFeatured === undefined) return -1;
+      if (aFeatured !== bFeatured) return aFeatured - bFeatured;
+    }
+
     const aRank = a.badge ? (badgePriority[a.badge] ?? 99) : 99;
     const bRank = b.badge ? (badgePriority[b.badge] ?? 99) : 99;
     if (aRank !== bRank) return aRank - bRank;
     return Number(a.id) - Number(b.id);
   });
+}
+
+function resolveImageByCode(code: string) {
+  const map: Record<string, string> = {
+    key_lifetime: '/assets/images/products/Lifetime.png',
+    key_30d: '/assets/images/products/30day.png',
+    key_1d: '/assets/images/products/1day.png',
+    key_3d: '/assets/images/products/3day.png',
+    key_7d: '/assets/images/products/7day.png',
+    key_14d: '/assets/images/products/14.png',
+    reset_hwid: '/assets/images/products/reset.png',
+  };
+  return map[code] ?? '/assets/store/lifetime.png';
+}
+
+function calculateFinalPrice(basePrice: number, discountPercent: number) {
+  const normalized = Math.min(90, Math.max(0, Math.floor(discountPercent)));
+  return Math.max(0, basePrice - Math.floor((basePrice * normalized) / 100));
 }
 
 export default function StoreClient() {
@@ -124,6 +173,13 @@ export default function StoreClient() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [showToast, setShowToast] = useState<string | null>(null);
   const [checkoutProcessing, setCheckoutProcessing] = useState(false);
+  const [imageStatus, setImageStatus] = useState<Record<string, 'loading' | 'loaded' | 'error'>>({});
+
+  const getImageState = (key: string) => imageStatus[key] ?? 'loading';
+  const setImageLoaded = (key: string) =>
+    setImageStatus((prev) => ({ ...prev, [key]: 'loaded' }));
+  const setImageError = (key: string) =>
+    setImageStatus((prev) => ({ ...prev, [key]: 'error' }));
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -137,12 +193,15 @@ export default function StoreClient() {
             category: 'KEY' | 'RESETHWID';
             duration_days: number | null;
             price_points: number;
+            discount_percent?: number;
+            image_url?: string | null;
           }>;
         };
         if (!Array.isArray(data.products) || data.products.length === 0) return;
         const badgeByCode: Record<string, string | undefined> = {
           key_lifetime: 'Most Popular',
           key_30d: 'Popular',
+          reset_hwid: 'Popular',
         };
         const mapped = data.products.map((item) => ({
             id: item.code,
@@ -154,11 +213,10 @@ export default function StoreClient() {
                 : item.duration_days == null
                   ? 'Lifetime license access with long-term profile support.'
                   : `${item.duration_days}-day license access for recoil profile usage.`,
-            price: item.price_points,
-            image:
-              item.code === 'reset_hwid'
-                ? '/assets/store/custom.png'
-                : '/assets/store/lifetime.png',
+            basePrice: item.price_points,
+            discountPercent: Math.max(0, Math.min(90, Math.floor(item.discount_percent ?? 0))),
+            finalPrice: calculateFinalPrice(item.price_points, item.discount_percent ?? 0),
+            image: item.image_url || resolveImageByCode(item.code),
             category: item.category,
             badge: badgeByCode[item.code],
           }));
@@ -201,7 +259,7 @@ export default function StoreClient() {
     );
   };
 
-  const cartTotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  const cartTotal = cart.reduce((sum, item) => sum + item.product.finalPrice * item.quantity, 0);
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const canPayWithPoints = profile && points >= cartTotal && cartTotal > 0;
 
@@ -301,12 +359,16 @@ export default function StoreClient() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
               {filteredProducts.map((product, idx) => (
+                (() => {
+                  const imageKey = `store-${product.id}-${product.image}`;
+                  const state = getImageState(imageKey);
+                  return (
                 <motion.div
                   key={product.id}
                   initial={{ opacity: 0, y: 24 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: idx * 0.05 }}
-                  className="group relative rounded-xl border border-white/[0.08] overflow-hidden bg-gradient-to-b from-white/[0.03] to-transparent backdrop-blur-sm hover:border-red-800/40 transition-all duration-300 hover:shadow-[0_8px_40px_-12px_rgba(153,27,27,0.25)]"
+                  className="group relative h-full rounded-xl border border-white/[0.08] overflow-hidden bg-gradient-to-b from-white/[0.03] to-transparent backdrop-blur-sm hover:border-red-800/40 transition-all duration-300 hover:shadow-[0_8px_40px_-12px_rgba(153,27,27,0.25)] flex flex-col"
                 >
                   {product.badge && (
                     <div className="absolute top-3 right-3 z-10">
@@ -317,28 +379,59 @@ export default function StoreClient() {
                   )}
                   
                   <div className="aspect-[4/3] relative bg-gradient-to-br from-white/[0.02] to-transparent flex items-center justify-center overflow-hidden">
-                    <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-xl bg-gradient-to-br from-white/5 to-transparent flex items-center justify-center border border-white/[0.08] shadow-inner">
-                      <svg className="w-12 h-12 sm:w-16 sm:h-16 text-red-800/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                      </svg>
-                    </div>
+                    {state !== 'loaded' && (
+                      <div className="absolute inset-0 animate-pulse bg-white/[0.06]" />
+                    )}
+                    <img
+                      src={product.image}
+                      alt={product.name}
+                      className={`w-full h-full object-cover transition-opacity duration-300 ${
+                        state === 'loaded' ? 'opacity-100' : 'opacity-0'
+                      }`}
+                      loading="lazy"
+                      onLoad={() => setImageLoaded(imageKey)}
+                      onError={() => setImageError(imageKey)}
+                    />
+                    {state === 'error' && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/70 px-3 text-center">
+                        <span className="text-xs text-white/70">Image unavailable</span>
+                      </div>
+                    )}
                     <div className="absolute inset-0 bg-gradient-to-t from-[#0a0a0a] via-transparent to-transparent opacity-60" />
                   </div>
 
-                  <div className="p-4 sm:p-5">
+                  <div className="p-4 sm:p-5 flex flex-col flex-1">
                     <p className="text-[10px] uppercase tracking-wider text-red-800 mb-1.5">
                       {product.category}
                     </p>
                     <h3 className="text-base sm:text-lg font-bold text-white mb-2">
                       {product.name}
                     </h3>
-                    <p className="text-xs sm:text-sm text-[var(--muted)] mb-4 line-clamp-2">
+                    <p className="text-xs sm:text-sm text-[var(--muted)] line-clamp-2 min-h-[40px]">
                       {product.description}
                     </p>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xl sm:text-2xl font-bold text-white">
-                        {formatTHB(product.price)}
-                      </span>
+                    <div className="mt-auto pt-4 flex items-end justify-between gap-3">
+                      {product.discountPercent > 0 ? (
+                        <div className="min-h-[58px] flex flex-col justify-end">
+                          <div className="flex items-center gap-2 leading-none">
+                            <span className="text-xl sm:text-2xl font-bold text-white">
+                              {formatTHB(product.finalPrice)}
+                            </span>
+                            <span className="inline-flex h-5 min-w-[46px] items-center justify-center rounded bg-red-700/85 px-1.5 text-[10px] font-bold text-white">
+                              -{product.discountPercent}%
+                            </span>
+                          </div>
+                          <span className="mt-1 text-xs text-white/45 line-through">
+                            {formatTHB(product.basePrice)}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="min-h-[58px] flex items-end">
+                          <span className="text-xl sm:text-2xl font-bold text-white leading-none">
+                            {formatTHB(product.finalPrice)}
+                          </span>
+                        </div>
+                      )}
                       <button
                         onClick={() => addToCart(product)}
                         className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm font-medium hover:bg-red-800 hover:border-red-800 transition-all duration-200"
@@ -348,6 +441,8 @@ export default function StoreClient() {
                     </div>
                   </div>
                 </motion.div>
+                  );
+                })()
               ))}
             </div>
           </div>
@@ -415,14 +510,31 @@ export default function StoreClient() {
                   <p className="text-center text-[var(--muted)] py-8">Your cart is empty</p>
                 ) : (
                   cart.map((item) => (
+                    (() => {
+                      const imageKey = `cart-${item.product.id}-${item.product.image}`;
+                      const state = getImageState(imageKey);
+                      return (
                     <div
                       key={item.product.id}
                       className="flex gap-4 p-3 rounded-lg bg-white/[0.02] border border-white/[0.06] backdrop-blur-sm"
                     >
-                      <div className="w-16 h-16 rounded-lg bg-white/5 flex items-center justify-center shrink-0">
-                        <svg className="w-8 h-8 text-red-800/50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                        </svg>
+                      <div className="relative w-16 h-16 rounded-lg bg-white/5 overflow-hidden flex items-center justify-center shrink-0">
+                        {state !== 'loaded' && (
+                          <div className="absolute w-16 h-16 animate-pulse bg-white/[0.06]" />
+                        )}
+                        <img
+                          src={item.product.image}
+                          alt={item.product.name}
+                          className={`w-full h-full object-cover transition-opacity duration-300 ${
+                            state === 'loaded' ? 'opacity-100' : 'opacity-0'
+                          }`}
+                          loading="lazy"
+                          onLoad={() => setImageLoaded(imageKey)}
+                          onError={() => setImageError(imageKey)}
+                        />
+                        {state === 'error' && (
+                          <span className="text-[10px] text-white/60">No Image</span>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <h3 className="text-sm font-semibold text-white truncate">{item.product.name}</h3>
@@ -430,7 +542,7 @@ export default function StoreClient() {
                           {item.product.category} • Quantity x{item.quantity}
                         </p>
                         <p className="text-sm font-bold text-white mt-1">
-                          {formatTHB(item.product.price * item.quantity)}
+                          {formatTHB(item.product.finalPrice * item.quantity)}
                         </p>
                       </div>
                       <button
@@ -442,6 +554,8 @@ export default function StoreClient() {
                         </svg>
                       </button>
                     </div>
+                      );
+                    })()
                   ))
                 )}
               </div>
@@ -507,7 +621,7 @@ export default function StoreClient() {
                     <span className="text-[var(--muted)]">
                       {item.product.name} • Quantity x{item.quantity}
                     </span>
-                    <span className="text-white">{formatTHB(item.product.price * item.quantity)}</span>
+                    <span className="text-white">{formatTHB(item.product.finalPrice * item.quantity)}</span>
                   </div>
                 ))}
                 <div className="pt-3 border-t border-white/[0.08] flex justify-between">

@@ -25,10 +25,18 @@ create table if not exists public.store_products (
   category text not null check (category in ('KEY', 'RESETHWID')),
   duration_days integer check (duration_days is null or duration_days > 0),
   price_points integer not null check (price_points >= 0),
+  discount_percent integer not null default 0 check (discount_percent >= 0 and discount_percent <= 90),
+  image_url text,
   is_active boolean not null default true,
   sort_order integer not null default 0,
   created_at timestamptz not null default now()
 );
+
+alter table public.store_products
+  add column if not exists discount_percent integer not null default 0 check (discount_percent >= 0 and discount_percent <= 90);
+
+alter table public.store_products
+  add column if not exists image_url text;
 
 create table if not exists public.purchase_transactions (
   id uuid primary key default gen_random_uuid(),
@@ -318,6 +326,85 @@ begin
       group by rc.user_id
     ) r on r.user_id = u.id
     order by u.created_at desc;
+end;
+$$;
+
+create or replace function public.admin_list_users_paged(
+  limit_rows integer default 50,
+  offset_rows integer default 0,
+  search_query text default null
+)
+returns table (
+  user_id uuid,
+  email text,
+  points integer,
+  total_topups integer,
+  active_licenses integer,
+  reset_credits_available integer,
+  created_at timestamptz,
+  total_count bigint
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  safe_limit integer := greatest(1, least(coalesce(limit_rows, 50), 100));
+  safe_offset integer := greatest(0, coalesce(offset_rows, 0));
+  normalized_search text := nullif(lower(trim(search_query)), '');
+begin
+  if uid is null or not public.is_admin(uid) then
+    raise exception 'FORBIDDEN';
+  end if;
+
+  return query
+    with base as (
+      select
+        u.id as user_id,
+        u.email::text as email,
+        coalesce(w.points, 0) as points,
+        coalesce(t.total_topups, 0)::integer as total_topups,
+        coalesce(l.active_licenses, 0)::integer as active_licenses,
+        coalesce(r.reset_credits_available, 0)::integer as reset_credits_available,
+        u.created_at
+      from auth.users u
+      left join public.user_wallets w on w.user_id = u.id
+      left join (
+        select tt.user_id, count(*) as total_topups
+        from public.topup_transactions tt
+        where tt.status = 'success'
+        group by tt.user_id
+      ) t on t.user_id = u.id
+      left join (
+        select ll.user_id, count(*) as active_licenses
+        from public.licenses ll
+        where ll.status = 'active'
+        group by ll.user_id
+      ) l on l.user_id = u.id
+      left join (
+        select rc.user_id, count(*) as reset_credits_available
+        from public.hwid_reset_credits rc
+        where rc.status = 'available'
+        group by rc.user_id
+      ) r on r.user_id = u.id
+      where normalized_search is null
+        or coalesce(lower(u.email::text), '') like '%' || normalized_search || '%'
+        or lower(u.id::text) like '%' || normalized_search || '%'
+    )
+    select
+      b.user_id,
+      b.email,
+      b.points,
+      b.total_topups,
+      b.active_licenses,
+      b.reset_credits_available,
+      b.created_at,
+      count(*) over() as total_count
+    from base b
+    order by b.created_at desc
+    limit safe_limit
+    offset safe_offset;
 end;
 $$;
 
@@ -615,6 +702,82 @@ begin
 end;
 $$;
 
+create or replace function public.admin_list_audit_logs_paged(
+  limit_rows integer default 50,
+  offset_rows integer default 0,
+  search_query text default null,
+  filter_action text default 'ALL',
+  filter_actor text default null,
+  date_from date default null,
+  date_to date default null
+)
+returns table (
+  id uuid,
+  actor_user_id uuid,
+  action text,
+  target_user_id uuid,
+  target_license_id uuid,
+  details jsonb,
+  created_at timestamptz,
+  total_count bigint
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  safe_limit integer := greatest(1, least(coalesce(limit_rows, 50), 100));
+  safe_offset integer := greatest(0, coalesce(offset_rows, 0));
+  normalized_search text := nullif(lower(trim(search_query)), '');
+  normalized_actor text := nullif(lower(trim(filter_actor)), '');
+  normalized_action text := coalesce(nullif(trim(filter_action), ''), 'ALL');
+begin
+  if uid is null or not public.is_admin(uid) then
+    raise exception 'FORBIDDEN';
+  end if;
+
+  return query
+    with filtered as (
+      select
+        a.id,
+        a.actor_user_id,
+        a.action,
+        a.target_user_id,
+        a.target_license_id,
+        a.details,
+        a.created_at
+      from public.admin_audit_logs a
+      where (normalized_action = 'ALL' or a.action = normalized_action)
+        and (normalized_actor is null or lower(a.actor_user_id::text) like '%' || normalized_actor || '%')
+        and (date_from is null or a.created_at >= date_from::timestamptz)
+        and (date_to is null or a.created_at <= (date_to::timestamptz + interval '1 day' - interval '1 millisecond'))
+        and (
+          normalized_search is null
+          or lower(a.id::text) like '%' || normalized_search || '%'
+          or lower(a.actor_user_id::text) like '%' || normalized_search || '%'
+          or lower(a.action) like '%' || normalized_search || '%'
+          or lower(coalesce(a.target_user_id::text, '')) like '%' || normalized_search || '%'
+          or lower(coalesce(a.target_license_id::text, '')) like '%' || normalized_search || '%'
+          or lower(a.details::text) like '%' || normalized_search || '%'
+        )
+    )
+    select
+      f.id,
+      f.actor_user_id,
+      f.action,
+      f.target_user_id,
+      f.target_license_id,
+      f.details,
+      f.created_at,
+      count(*) over() as total_count
+    from filtered f
+    order by f.created_at desc
+    limit safe_limit
+    offset safe_offset;
+end;
+$$;
+
 create or replace function public.admin_list_admin_users()
 returns table (
   user_id uuid
@@ -637,6 +800,214 @@ begin
 end;
 $$;
 
+create or replace function public.admin_list_store_products()
+returns table (
+  code text,
+  name text,
+  category text,
+  duration_days integer,
+  price_points integer,
+  discount_percent integer,
+  image_url text,
+  is_active boolean,
+  sort_order integer
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+begin
+  if uid is null or not public.is_admin(uid) then
+    raise exception 'FORBIDDEN';
+  end if;
+
+  return query
+    select
+      p.code,
+      p.name,
+      p.category,
+      p.duration_days,
+      p.price_points,
+      p.discount_percent,
+      p.image_url,
+      p.is_active,
+      p.sort_order
+    from public.store_products p
+    order by p.sort_order asc, p.created_at asc;
+end;
+$$;
+
+create or replace function public.admin_upsert_store_product(
+  target_code text,
+  target_name text,
+  target_category text,
+  target_duration_days integer,
+  target_price_points integer,
+  target_discount_percent integer,
+  target_image_url text,
+  target_is_active boolean,
+  target_sort_order integer
+)
+returns public.store_products
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  normalized_code text := lower(trim(target_code));
+  normalized_name text := trim(target_name);
+  normalized_category text := upper(trim(target_category));
+  normalized_discount integer := coalesce(target_discount_percent, 0);
+  normalized_price integer := coalesce(target_price_points, 0);
+  normalized_sort integer := coalesce(target_sort_order, 0);
+  normalized_duration integer := target_duration_days;
+  normalized_image text := nullif(trim(coalesce(target_image_url, '')), '');
+  result_row public.store_products%rowtype;
+begin
+  if uid is null or not public.is_admin(uid) then
+    raise exception 'FORBIDDEN';
+  end if;
+
+  if normalized_code is null or normalized_code = '' then
+    raise exception 'INVALID_CODE';
+  end if;
+
+  if normalized_name is null or normalized_name = '' then
+    raise exception 'INVALID_NAME';
+  end if;
+
+  if normalized_category not in ('KEY', 'RESETHWID') then
+    raise exception 'INVALID_CATEGORY';
+  end if;
+
+  if normalized_price < 0 then
+    raise exception 'INVALID_PRICE';
+  end if;
+
+  if normalized_discount < 0 or normalized_discount > 90 then
+    raise exception 'INVALID_DISCOUNT';
+  end if;
+
+  if normalized_category = 'KEY' and normalized_duration is not null and normalized_duration <= 0 then
+    raise exception 'INVALID_DURATION';
+  end if;
+
+  if normalized_category = 'RESETHWID' then
+    normalized_duration := null;
+  end if;
+
+  insert into public.store_products (
+    code,
+    name,
+    category,
+    duration_days,
+    price_points,
+    discount_percent,
+    image_url,
+    is_active,
+    sort_order
+  ) values (
+    normalized_code,
+    normalized_name,
+    normalized_category,
+    normalized_duration,
+    normalized_price,
+    normalized_discount,
+    normalized_image,
+    coalesce(target_is_active, true),
+    normalized_sort
+  )
+  on conflict (code) do update
+  set
+    name = excluded.name,
+    category = excluded.category,
+    duration_days = excluded.duration_days,
+    price_points = excluded.price_points,
+    discount_percent = excluded.discount_percent,
+    image_url = excluded.image_url,
+    is_active = excluded.is_active,
+    sort_order = excluded.sort_order
+  returning * into result_row;
+
+  perform public.log_admin_event(
+    'admin_upsert_store_product',
+    null,
+    null,
+    jsonb_build_object(
+      'code', result_row.code,
+      'name', result_row.name,
+      'category', result_row.category,
+      'price_points', result_row.price_points,
+      'discount_percent', result_row.discount_percent,
+      'is_active', result_row.is_active
+    )
+  );
+
+  return result_row;
+end;
+$$;
+
+create or replace function public.admin_remove_store_product(target_code text)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  normalized_code text := lower(trim(target_code));
+  has_refs boolean := false;
+begin
+  if uid is null or not public.is_admin(uid) then
+    raise exception 'FORBIDDEN';
+  end if;
+
+  if normalized_code is null or normalized_code = '' then
+    raise exception 'INVALID_CODE';
+  end if;
+
+  if not exists(select 1 from public.store_products where code = normalized_code) then
+    raise exception 'PRODUCT_NOT_FOUND';
+  end if;
+
+  select exists(
+    select 1 from public.purchase_transactions p where p.product_code = normalized_code
+    union all
+    select 1 from public.licenses l where l.product_code = normalized_code
+  )
+  into has_refs;
+
+  if has_refs then
+    update public.store_products
+    set is_active = false
+    where code = normalized_code;
+
+    perform public.log_admin_event(
+      'admin_deactivate_store_product',
+      null,
+      null,
+      jsonb_build_object('code', normalized_code)
+    );
+    return 'deactivated';
+  end if;
+
+  delete from public.store_products
+  where code = normalized_code;
+
+  perform public.log_admin_event(
+    'admin_remove_store_product',
+    null,
+    null,
+    jsonb_build_object('code', normalized_code)
+  );
+
+  return 'deleted';
+end;
+$$;
+
 create or replace function public.purchase_products(product_codes text[])
 returns table (
   purchase_id uuid,
@@ -654,6 +1025,7 @@ declare
   code_item text;
   product_row public.store_products%rowtype;
   current_points integer;
+  final_price integer;
   purchase_row public.purchase_transactions%rowtype;
   generated_key text;
   generated_expiry timestamptz;
@@ -682,18 +1054,23 @@ begin
       raise exception 'INVALID_PRODUCT:%', code_item;
     end if;
 
-    if current_points < product_row.price_points then
+    final_price := greatest(
+      0,
+      product_row.price_points - floor((product_row.price_points * product_row.discount_percent) / 100.0)::integer
+    );
+
+    if current_points < final_price then
       raise exception 'INSUFFICIENT_POINTS';
     end if;
 
     update public.user_wallets
-    set points = points - product_row.price_points,
+    set points = points - final_price,
         updated_at = now()
     where user_id = uid
     returning points into current_points;
 
     insert into public.purchase_transactions (user_id, product_code, price_points, status)
-    values (uid, product_row.code, product_row.price_points, 'success')
+    values (uid, product_row.code, final_price, 'success')
     returning * into purchase_row;
 
     generated_key := upper(
@@ -931,21 +1308,23 @@ begin
 end;
 $$;
 
-insert into public.store_products (code, name, category, duration_days, price_points, is_active, sort_order)
+insert into public.store_products (code, name, category, duration_days, price_points, discount_percent, image_url, is_active, sort_order)
 values
-  ('key_1d', 'Key 1Day', 'KEY', 1, 39, true, 1),
-  ('key_3d', 'Key 3Day', 'KEY', 3, 99, true, 2),
-  ('key_7d', 'Key 7Day', 'KEY', 7, 199, true, 3),
-  ('key_14d', 'Key 14Day', 'KEY', 14, 299, true, 4),
-  ('key_30d', 'Key 30Day', 'KEY', 30, 499, true, 5),
-  ('key_lifetime', 'Key Lifetime', 'KEY', null, 1499, true, 6),
-  ('reset_hwid', 'ResetHWID', 'RESETHWID', null, 149, true, 7)
+  ('key_1d', 'Key 1Day', 'KEY', 1, 39, 0, '/assets/images/products/1day.png', true, 1),
+  ('key_3d', 'Key 3Day', 'KEY', 3, 99, 0, '/assets/images/products/3day.png', true, 2),
+  ('key_7d', 'Key 7Day', 'KEY', 7, 199, 0, '/assets/images/products/7day.png', true, 3),
+  ('key_14d', 'Key 14Day', 'KEY', 14, 299, 0, '/assets/images/products/14.png', true, 4),
+  ('key_30d', 'Key 30Day', 'KEY', 30, 499, 0, '/assets/images/products/30day.png', true, 5),
+  ('key_lifetime', 'Key Lifetime', 'KEY', null, 1499, 0, '/assets/images/products/Lifetime.png', true, 6),
+  ('reset_hwid', 'ResetHWID', 'RESETHWID', null, 149, 0, '/assets/images/products/reset.png', true, 7)
 on conflict (code) do update
 set
   name = excluded.name,
   category = excluded.category,
   duration_days = excluded.duration_days,
   price_points = excluded.price_points,
+  discount_percent = excluded.discount_percent,
+  image_url = excluded.image_url,
   is_active = excluded.is_active,
   sort_order = excluded.sort_order;
 

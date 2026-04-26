@@ -32,7 +32,6 @@ export function VideoShowcase() {
             loop
             autoPlay
             className="w-full h-full object-cover"
-            poster="/images/phantomforce.jpg"
           />
           {/* Dark fade overlay - smooth gradual blend */}
           <div

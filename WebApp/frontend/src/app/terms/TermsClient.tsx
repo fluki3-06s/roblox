@@ -38,17 +38,17 @@ export default function TermsClient() {
               <section className="p-5 sm:p-6 rounded-xl bg-white/[0.02] border border-white/[0.08] backdrop-blur-sm">
                 <h2 className="text-lg font-bold text-white mb-3">1. Acceptance of Terms</h2>
                 <p className="text-sm text-[var(--muted)] leading-relaxed">
-                  By accessing and using Kyromac, you accept and agree to be bound by the terms and provision of this agreement. If you do not agree to abide by these terms, please do not use this service.
+                  By purchasing, accessing, or using any digital product on Kyromac, you acknowledge that you have read, understood, and agreed to all terms in this page. If you do not agree, do not purchase or use the service.
                 </p>
               </section>
 
               <section className="p-5 sm:p-6 rounded-xl bg-white/[0.02] border border-white/[0.08] backdrop-blur-sm">
-                <h2 className="text-lg font-bold text-white mb-3">2. Use License</h2>
+                <h2 className="text-lg font-bold text-white mb-3">2. Digital Product License</h2>
                 <p className="text-sm text-[var(--muted)] leading-relaxed mb-3">
-                  Permission is granted to temporarily use Kyromac for personal, non-commercial use only. This is the grant of a license, not a transfer of title.
+                  All products are digital and license-based. Your purchase grants a limited, revocable, non-transferable right to use the product for personal use only. No ownership of software or intellectual property is transferred.
                 </p>
                 <p className="text-sm text-[var(--muted)] leading-relaxed">
-                  You may not: modify or copy the materials, use the materials for any commercial purpose, transfer the materials to another person, or attempt to reverse engineer any software contained in the service.
+                  You may not resell, share, leak, redistribute, or reverse engineer any part of our products. Violations may result in immediate suspension or termination without compensation.
                 </p>
               </section>
 
@@ -91,6 +91,34 @@ export default function TermsClient() {
                 <h2 className="text-lg font-bold text-white mb-3">8. Contact Information</h2>
                 <p className="text-sm text-[var(--muted)] leading-relaxed">
                   If you have any questions about these Terms of Service, please contact us through our Discord server.
+                </p>
+              </section>
+
+              <section className="p-5 sm:p-6 rounded-xl bg-white/[0.02] border border-white/[0.08] backdrop-blur-sm">
+                <h2 className="text-lg font-bold text-white mb-3">9. Ban Risk Acknowledgement</h2>
+                <p className="text-sm text-[var(--muted)] leading-relaxed">
+                  You acknowledge that using third-party game tools may violate game publisher rules and may result in sanctions, including temporary or permanent bans. By purchasing and using our products, you accept all related risks yourself.
+                </p>
+              </section>
+
+              <section className="p-5 sm:p-6 rounded-xl bg-white/[0.02] border border-white/[0.08] backdrop-blur-sm">
+                <h2 className="text-lg font-bold text-white mb-3">10. No Refund and Final Sale</h2>
+                <p className="text-sm text-[var(--muted)] leading-relaxed">
+                  All sales are final. Due to the digital and instantly deliverable nature of our products, we do not provide refunds, returns, exchanges, or chargeback acceptance after successful delivery.
+                </p>
+              </section>
+
+              <section className="p-5 sm:p-6 rounded-xl bg-white/[0.02] border border-white/[0.08] backdrop-blur-sm">
+                <h2 className="text-lg font-bold text-white mb-3">11. Limitation of Responsibility</h2>
+                <p className="text-sm text-[var(--muted)] leading-relaxed">
+                  We are not responsible for any account bans, account restrictions, loss of in-game progress, loss of virtual items, downtime, or any direct/indirect damages resulting from product use, misuse, or inability to use.
+                </p>
+              </section>
+
+              <section className="p-5 sm:p-6 rounded-xl bg-white/[0.02] border border-white/[0.08] backdrop-blur-sm">
+                <h2 className="text-lg font-bold text-white mb-3">12. Exceptional Support Cases</h2>
+                <p className="text-sm text-[var(--muted)] leading-relaxed">
+                  Support or replacement may be considered only when our system fails to deliver a purchased product and the failure can be verified by our records. Decisions in such cases are solely at our discretion.
                 </p>
               </section>
             </motion.div>
