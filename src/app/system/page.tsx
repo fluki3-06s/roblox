@@ -746,6 +746,20 @@ export default function SystemPage() {
     }
   }
 
+  async function closeWindowWithPersist() {
+    if (hasHydratedSettings) {
+      const snapshot = latestSettingsPayloadRef.current;
+      if (snapshot) {
+        try {
+          await writeSystemSettings(snapshot);
+        } catch {
+          // best effort before closing the app window
+        }
+      }
+    }
+    await handleWindowAction("close");
+  }
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setIsPanelBooting(false);
@@ -1478,7 +1492,7 @@ export default function SystemPage() {
           </button>
           <button
             type="button"
-            onClick={() => handleWindowAction("close")}
+            onClick={() => void closeWindowWithPersist()}
             aria-label="Close window"
             className="flex h-8 w-8 items-center justify-center rounded-md bg-transparent text-zinc-300 transition hover:text-white active:scale-95"
           >

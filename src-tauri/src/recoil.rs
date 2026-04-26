@@ -8,15 +8,11 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThread, SetPriorityClass, SetThreadPriority, HIGH_PRIORITY_CLASS,
-    THREAD_PRIORITY_HIGHEST,
-};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, mouse_event, MOUSEEVENTF_MOVE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL,
-    WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
+    UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 const VK_LBUTTON: i32 = 0x01;
@@ -242,13 +238,6 @@ impl RecoilEngine {
 }
 
 fn run_loop(state: Arc<Mutex<EngineState>>, alive: Arc<AtomicBool>) {
-    // Raise scheduling priority so hotkey/recoil loop is less likely to be starved
-    // when other focused apps (e.g. games) consume CPU.
-    unsafe {
-        let _ = SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-    }
-
     while alive.load(Ordering::SeqCst) {
         let wait_ms = {
             let mut engine = match state.lock() {
@@ -266,9 +255,8 @@ fn run_loop(state: Arc<Mutex<EngineState>>, alive: Arc<AtomicBool>) {
                 }
             }
             engine.f8_pressed = f8_now;
-            if !HOOK_ACTIVE.load(Ordering::SeqCst) {
-                apply_config_hotkeys(&mut engine, ads, fire);
-            }
+            reconcile_hotkey_release_state(&mut engine);
+            apply_config_hotkeys(&mut engine, ads, fire);
             if !engine.enabled {
                 engine.reset_recoil();
                 8.0
@@ -296,15 +284,14 @@ fn apply_config_hotkeys(engine: &mut EngineState, _ads: bool, _fire: bool) {
         .unwrap_or(0);
 
     for (idx, scope_name) in scopes.iter().enumerate() {
-        let binding = &engine.scope_hotkeys[idx];
-        let pressed = is_any_pressed(binding);
+        let binding = engine.scope_hotkeys[idx].clone();
+        let pressed = is_any_pressed(&binding);
         if pressed {
             let is_new_press = !engine.hotkey_pressed[idx];
-            let cooldown_elapsed =
-                now_ms.saturating_sub(engine.hotkey_last_trigger_ms[idx]) >= HOTKEY_REPEAT_COOLDOWN_MS;
-            if is_new_press || cooldown_elapsed {
+            if is_new_press {
                 engine.scope = (*scope_name).to_string();
                 engine.hotkey_last_trigger_ms[idx] = now_ms;
+                engine.reset_recoil();
                 ACTIVE_HOTKEY_SOURCE.store(HOTKEY_SOURCE_POLLING, Ordering::SeqCst);
                 log::info!("polling hotkey switched scope -> {} (binding={:?})", scope_name, binding);
             }
@@ -496,6 +483,16 @@ fn is_any_pressed(vks: &[i32]) -> bool {
     vks.iter().any(|vk| is_pressed(*vk))
 }
 
+fn reconcile_hotkey_release_state(engine: &mut EngineState) {
+    for idx in 0..engine.scope_hotkeys.len() {
+        let pressed_now = is_any_pressed(&engine.scope_hotkeys[idx]);
+        if !pressed_now {
+            engine.hook_hotkey_pressed[idx] = false;
+            engine.hotkey_pressed[idx] = false;
+        }
+    }
+}
+
 fn run_global_hook_loop(
     state: Arc<Mutex<EngineState>>,
     alive: Arc<AtomicBool>,
@@ -508,21 +505,16 @@ fn run_global_hook_loop(
 
     unsafe {
         let keyboard_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), null_mut(), 0);
-        let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), null_mut(), 0);
-
-        if keyboard_hook.is_null() || mouse_hook.is_null() {
-            append_hook_trace("failed to install one or more low-level hooks");
+        if keyboard_hook.is_null() {
+            append_hook_trace("failed to install keyboard low-level hook");
             if !keyboard_hook.is_null() {
                 let _ = UnhookWindowsHookEx(keyboard_hook);
-            }
-            if !mouse_hook.is_null() {
-                let _ = UnhookWindowsHookEx(mouse_hook);
             }
             hook_thread_id.store(0, Ordering::SeqCst);
             return;
         }
         HOOK_ACTIVE.store(true, Ordering::SeqCst);
-        append_hook_trace("low-level hooks installed");
+        append_hook_trace("keyboard low-level hook installed");
 
         let mut msg: MSG = std::mem::zeroed();
         while alive.load(Ordering::SeqCst) && GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
@@ -531,7 +523,6 @@ fn run_global_hook_loop(
         }
 
         let _ = UnhookWindowsHookEx(keyboard_hook);
-        let _ = UnhookWindowsHookEx(mouse_hook);
     }
 
     HOOK_ACTIVE.store(false, Ordering::SeqCst);
@@ -547,33 +538,6 @@ unsafe extern "system" fn low_level_keyboard_proc(code: i32, wparam: usize, lpar
     } else if (code as u32) == HC_ACTION && (wparam as u32 == WM_KEYUP || wparam as u32 == WM_SYSKEYUP) {
         let data = &*(lparam as *const KBDLLHOOKSTRUCT);
         handle_global_hotkey_vk(data.vkCode as i32, false);
-    }
-    CallNextHookEx(null_mut() as HHOOK, code, wparam, lparam)
-}
-
-unsafe extern "system" fn low_level_mouse_proc(code: i32, wparam: usize, lparam: isize) -> isize {
-    if (code as u32) == HC_ACTION && (wparam as u32 == WM_XBUTTONDOWN) {
-        let data = &*(lparam as *const MSLLHOOKSTRUCT);
-        let x_button = ((data.mouseData >> 16) & 0xFFFF) as u16;
-        if x_button == XBUTTON1 as u16 {
-            append_hook_trace("mouse xbutton1 event");
-            handle_global_hotkey_vk(VK_XBUTTON1, true);
-            handle_global_hotkey_vk(VK_BROWSER_BACK, true);
-        } else if x_button == XBUTTON2 as u16 {
-            append_hook_trace("mouse xbutton2 event");
-            handle_global_hotkey_vk(VK_XBUTTON2, true);
-            handle_global_hotkey_vk(VK_BROWSER_FORWARD, true);
-        }
-    } else if (code as u32) == HC_ACTION && (wparam as u32 == WM_XBUTTONUP) {
-        let data = &*(lparam as *const MSLLHOOKSTRUCT);
-        let x_button = ((data.mouseData >> 16) & 0xFFFF) as u16;
-        if x_button == XBUTTON1 as u16 {
-            handle_global_hotkey_vk(VK_XBUTTON1, false);
-            handle_global_hotkey_vk(VK_BROWSER_BACK, false);
-        } else if x_button == XBUTTON2 as u16 {
-            handle_global_hotkey_vk(VK_XBUTTON2, false);
-            handle_global_hotkey_vk(VK_BROWSER_FORWARD, false);
-        }
     }
     CallNextHookEx(null_mut() as HHOOK, code, wparam, lparam)
 }
@@ -609,6 +573,7 @@ fn handle_global_hotkey_vk(vk: i32, pressed: bool) {
                 engine.scope = (*scope_name).to_string();
                 engine.hotkey_last_trigger_ms[idx] = now_ms;
                 engine.hook_hotkey_pressed[idx] = true;
+                engine.reset_recoil();
                 ACTIVE_HOTKEY_SOURCE.store(HOTKEY_SOURCE_HOOK, Ordering::SeqCst);
                 log::info!("hook hotkey switched scope -> {} (vk={})", scope_name, vk);
                 append_hook_trace(&format!("hook switched scope={} via vk={}", scope_name, vk));
