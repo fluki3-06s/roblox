@@ -30,6 +30,13 @@ import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/w
 
 const modeItems = ["Reddot", "SCOPE X2", "SCOPE X3", "SCOPE X4", "SCOPE X6"];
 const hotkeyItems = ["Reddot", "SCOPE X2", "SCOPE X3", "SCOPE X4", "SCOPE X6"];
+const modeLabels: Record<string, string> = {
+  Reddot: "Scope Close",
+  "SCOPE X2": "Scope Short",
+  "SCOPE X3": "Scope Mid",
+  "SCOPE X4": "Scope Long",
+  "SCOPE X6": "Scope Extreme",
+};
 const discordInviteUrl = "https://discord.gg/C55em8v3e";
 const discordPreviewSlides = [
   "/discord-slider/8253dec.webp",
@@ -178,6 +185,10 @@ function formatMouseButtonLabel(button: number) {
   if (button === 3) return "Mouse4";
   if (button === 4) return "Mouse5";
   return null;
+}
+
+function getModeLabel(mode: string) {
+  return modeLabels[mode] ?? mode;
 }
 
 function normalizeHotkeyToken(value: string) {
@@ -885,7 +896,7 @@ export default function SystemPage() {
         }
 
         lastDuplicateToastAtRef.current = now;
-        setHotkeyNotice(`${nextKey} is already used by ${duplicate[0]}.`);
+        setHotkeyNotice(`${nextKey} is already used by ${getModeLabel(duplicate[0])}.`);
         return;
       }
 
@@ -916,7 +927,7 @@ export default function SystemPage() {
         }
 
         lastDuplicateToastAtRef.current = now;
-        setHotkeyNotice(`${nextKey} is already used by ${duplicate[0]}.`);
+        setHotkeyNotice(`${nextKey} is already used by ${getModeLabel(duplicate[0])}.`);
         return;
       }
 
@@ -942,6 +953,7 @@ export default function SystemPage() {
     if (bindingTarget) return;
 
     function onHotkeySwitch(event: KeyboardEvent) {
+      if (!isRecoilEnabled) return;
       const pressedKey = formatHotkeyLabel(event.key, event.code);
       const normalized = normalizeHotkeyToken(pressedKey);
       if (pressedHotkeysRef.current.has(normalized)) return;
@@ -956,6 +968,7 @@ export default function SystemPage() {
     }
 
     function onMouseHotkeySwitch(event: MouseEvent) {
+      if (!isRecoilEnabled) return;
       const pressedKey = formatMouseButtonLabel(event.button);
       if (!pressedKey) return;
       const normalized = normalizeHotkeyToken(pressedKey);
@@ -982,18 +995,28 @@ export default function SystemPage() {
       pressedHotkeysRef.current.delete(normalizeHotkeyToken(releasedKey));
     }
 
+    function resetPressedHotkeys() {
+      pressedHotkeysRef.current.clear();
+    }
+
     window.addEventListener("keydown", onHotkeySwitch);
     window.addEventListener("keyup", onHotkeyRelease);
     window.addEventListener("mousedown", onMouseHotkeySwitch);
     window.addEventListener("mouseup", onMouseHotkeyRelease);
+    window.addEventListener("blur", resetPressedHotkeys);
+    window.addEventListener("mouseleave", resetPressedHotkeys);
+    document.addEventListener("visibilitychange", resetPressedHotkeys);
     return () => {
       window.removeEventListener("keydown", onHotkeySwitch);
       window.removeEventListener("keyup", onHotkeyRelease);
       window.removeEventListener("mousedown", onMouseHotkeySwitch);
       window.removeEventListener("mouseup", onMouseHotkeyRelease);
+      window.removeEventListener("blur", resetPressedHotkeys);
+      window.removeEventListener("mouseleave", resetPressedHotkeys);
+      document.removeEventListener("visibilitychange", resetPressedHotkeys);
       pressedHotkeysRef.current.clear();
     };
-  }, [bindingTarget, hotkeys, selectedMode]);
+  }, [bindingTarget, hotkeys, selectedMode, isRecoilEnabled]);
 
   useEffect(() => {
     if (!bindingTarget) return;
@@ -1125,6 +1148,7 @@ export default function SystemPage() {
   useEffect(() => {
     const uiMode = recoilScopeToUiMode[runtimeScope];
     if (uiMode && uiMode !== selectedMode) {
+      playModeSwitchBeep(uiMode, soundTone);
       setSelectedMode(uiMode);
     }
   }, [runtimeScope, selectedMode]);
@@ -1226,10 +1250,10 @@ export default function SystemPage() {
                   />
                   <div className="flex items-center text-left">
                     <p
-                      className="text-[13px] font-semibold tracking-wide text-zinc-100 whitespace-nowrap"
+                      className="text-[13px] font-semibold tracking-wide text-zinc-100"
                       style={selectedMode === item ? { color: accentColor } : undefined}
                     >
-                      {item}
+                      {getModeLabel(item)}
                     </p>
                   </div>
                 </button>
@@ -1318,7 +1342,7 @@ export default function SystemPage() {
             >
               {isRecoilRunning
                 ? isRecoilEnabled
-                  ? `ENGINE ON ${runtimeScope} G${(verticalStrength[0] ?? 1.0).toFixed(2)} I${(horizontalStrength[0] ?? 10).toFixed(1)}`
+                  ? `ENGINE ON ${getModeLabel(recoilScopeToUiMode[runtimeScope] ?? runtimeScope)} G${(verticalStrength[0] ?? 1.0).toFixed(2)} I${(horizontalStrength[0] ?? 10).toFixed(1)}`
                   : "ENGINE PAUSED"
                 : "ENGINE OFFLINE"}
             </p>
@@ -1530,31 +1554,41 @@ export default function SystemPage() {
                   <div className="flex min-w-0 items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p
-                        className="whitespace-nowrap text-[12px] font-semibold tracking-wide text-zinc-100"
+                        className="text-[12px] font-semibold tracking-wide text-zinc-100"
                         style={bindingTarget === item ? { color: accentColor } : undefined}
                       >
-                        {item}
+                        {getModeLabel(item)}
                       </p>
                     </div>
                     <span
                       className={`mt-0.5 min-w-9 shrink-0 rounded-none px-1.5 py-1 text-center text-[11px] font-bold tracking-wide ${
                         bindingTarget === item
-                          ? "bg-white text-black shadow-[0_0_10px_rgba(255,255,255,0.28)]"
+                          ? "border border-white/40 bg-black/60 text-white shadow-[0_0_8px_rgba(255,255,255,0.2)]"
                           : "bg-black/45 text-zinc-300 ring-1 ring-white/10"
                       }`}
                     >
-                      {hotkeys[item]}
+                      {bindingTarget === item ? (
+                        <span className="inline-flex items-center justify-center gap-1">
+                          <span className="inline-block animate-bounce [animation-duration:1.1s] [animation-delay:0ms]">
+                            .
+                          </span>
+                          <span className="inline-block animate-bounce [animation-duration:1.1s] [animation-delay:140ms]">
+                            .
+                          </span>
+                          <span className="inline-block animate-bounce [animation-duration:1.1s] [animation-delay:280ms]">
+                            .
+                          </span>
+                        </span>
+                      ) : (
+                        hotkeys[item]
+                      )}
                     </span>
                   </div>
                 </button>
               </li>
             ))}
           </ul>
-          {hotkeyNotice ? (
-            <p className="mt-2 text-[11px] text-red-300/90">{hotkeyNotice}</p>
-          ) : null}
-
-          <div className="absolute bottom-23 left-1/2 h-[72px] w-[146px] -translate-x-1/2 overflow-hidden rounded-md bg-black/30 shadow-[0_12px_30px_rgba(0,0,0,0.55),0_0_26px_rgba(0,0,0,0.48)]">
+          <div className="absolute bottom-20 left-1/2 h-[72px] w-[146px] -translate-x-1/2 overflow-hidden rounded-md bg-black/30 shadow-[0_12px_30px_rgba(0,0,0,0.55),0_0_26px_rgba(0,0,0,0.48)]">
             {!loadedDiscordSlides[discordSlideIndex] ? (
               <div className="absolute inset-0 animate-pulse bg-linear-to-r from-zinc-900/80 via-zinc-800/60 to-zinc-900/80" />
             ) : null}
@@ -1578,7 +1612,7 @@ export default function SystemPage() {
             <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-black/45 via-transparent to-black/20" />
           </div>
 
-          <div className="absolute bottom-11.5 left-1/2 flex -translate-x-1/2 items-center justify-center">
+          <div className="absolute bottom-9 left-1/2 flex -translate-x-1/2 items-center justify-center">
             <a
               href={discordInviteUrl}
               target="_blank"
@@ -1600,7 +1634,7 @@ export default function SystemPage() {
             </a>
           </div>
 
-          <div className="absolute bottom-7 left-1/2 flex -translate-x-1/2 items-center gap-1.5">
+          <div className="absolute bottom-4.5 left-1/2 flex -translate-x-1/2 items-center gap-1.5">
             <span className="status-pulse-green inline-block h-1.5 w-1.5 rounded-full bg-green-400" />
             <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-green-300">
               UNDETECTED
@@ -1617,6 +1651,14 @@ export default function SystemPage() {
             }`}
           >
             {actionNotice.text}
+          </p>
+        </div>
+      ) : null}
+
+      {hotkeyNotice ? (
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-50 -translate-x-1/2">
+          <p className="px-2 py-1 text-[11px] font-medium tracking-wide text-red-200">
+            {hotkeyNotice}
           </p>
         </div>
       ) : null}
